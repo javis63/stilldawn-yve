@@ -14,12 +14,15 @@ import logoSvg from "@/assets/logo.svg";
 const emailSchema = z.string().email("Please enter a valid email address");
 const passwordSchema = z.string().min(6, "Password must be at least 6 characters");
 
+type AuthMode = "signin" | "signup";
+
 export default function Auth() {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<AuthMode>("signin");
 
   // Redirect if already logged in
   useEffect(() => {
@@ -54,15 +57,35 @@ export default function Auth() {
 
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) {
-        if (error.message.includes("Invalid login credentials")) {
-          toast.error("Invalid email or password. Please try again.");
+      if (mode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/`,
+          },
+        });
+        if (error) {
+          if (error.message.includes("User already registered")) {
+            toast.error("An account with this email already exists. Please sign in instead.");
+          } else {
+            throw error;
+          }
         } else {
-          throw error;
+          toast.success("Account created successfully! You can now sign in.");
+          setMode("signin");
+        }
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) {
+          if (error.message.includes("Invalid login credentials")) {
+            toast.error("Invalid email or password. Please try again or create an account.");
+          } else {
+            throw error;
+          }
         }
       }
     } catch (error: any) {
@@ -103,9 +126,13 @@ export default function Auth() {
           <div className="flex justify-center mb-2">
             <img src={logoSvg} alt="STILLDAWN STUDIOS" className="h-16 w-16" />
           </div>
-          <CardTitle className="text-2xl">Welcome back</CardTitle>
+          <CardTitle className="text-2xl">
+            {mode === "signin" ? "Welcome back" : "Create account"}
+          </CardTitle>
           <CardDescription className="text-muted-foreground">
-            Sign in to continue to your projects
+            {mode === "signin" 
+              ? "Sign in to continue to your projects" 
+              : "Sign up to start creating videos"}
           </CardDescription>
         </CardHeader>
 
@@ -184,11 +211,39 @@ export default function Auth() {
             >
               {loading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
+              ) : mode === "signin" ? (
                 "Sign in"
+              ) : (
+                "Create account"
               )}
             </Button>
           </form>
+
+          <div className="text-center text-sm text-muted-foreground">
+            {mode === "signin" ? (
+              <>
+                Don't have an account?{" "}
+                <button
+                  type="button"
+                  onClick={() => setMode("signup")}
+                  className="text-primary hover:underline font-medium"
+                >
+                  Sign up
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?{" "}
+                <button
+                  type="button"
+                  onClick={() => setMode("signin")}
+                  className="text-primary hover:underline font-medium"
+                >
+                  Sign in
+                </button>
+              </>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>
