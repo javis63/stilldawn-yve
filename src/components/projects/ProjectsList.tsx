@@ -3,10 +3,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
-import { Search, RefreshCw, FolderOpen, Clock, Film } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Search, RefreshCw, FolderOpen, Clock, Film, Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Project } from "@/types/project";
 import { formatDistanceToNow } from "date-fns";
+import { toast } from "sonner";
 
 interface ProjectsListProps {
   selectedProjectId: string | null;
@@ -17,7 +28,9 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const fetchProjects = async () => {
     setLoading(true);
     try {
@@ -38,6 +51,53 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
   useEffect(() => {
     fetchProjects();
   }, []);
+
+  const handleDeleteProject = async () => {
+    if (!projectToDelete) return;
+    
+    setDeleting(true);
+    try {
+      // Delete associated renders first (cascades will handle scenes)
+      const { error: rendersError } = await supabase
+        .from("renders")
+        .delete()
+        .eq("project_id", projectToDelete.id);
+      
+      if (rendersError) throw rendersError;
+
+      // Delete associated scenes
+      const { error: scenesError } = await supabase
+        .from("scenes")
+        .delete()
+        .eq("project_id", projectToDelete.id);
+      
+      if (scenesError) throw scenesError;
+
+      // Delete the project
+      const { error: projectError } = await supabase
+        .from("projects")
+        .delete()
+        .eq("id", projectToDelete.id);
+      
+      if (projectError) throw projectError;
+
+      toast.success("Project deleted successfully");
+      setProjects((prev) => prev.filter((p) => p.id !== projectToDelete.id));
+      
+      // Clear selection if deleted project was selected
+      if (selectedProjectId === projectToDelete.id) {
+        onSelectProject(null as any);
+      }
+    } catch (error: any) {
+      console.error("Error deleting project:", error);
+      toast.error(error.message || "Failed to delete project");
+    } finally {
+      setDeleting(false);
+      setDeleteDialogOpen(false);
+      setProjectToDelete(null);
+    }
+  };
+
 
   const filteredProjects = projects.filter((project) =>
     project.title.toLowerCase().includes(searchQuery.toLowerCase())
@@ -127,12 +187,46 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
                       </span>
                     </div>
                   </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setProjectToDelete(project);
+                      setDeleteDialogOpen(true);
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
               </Card>
             ))
           )}
         </div>
       </ScrollArea>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Project</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{projectToDelete?.title}"? This will also delete all scenes and rendered videos associated with this project. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteProject}
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

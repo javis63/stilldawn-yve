@@ -4,6 +4,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -21,6 +31,7 @@ import {
   FileText,
   Hash,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Render } from "@/types/project";
@@ -43,7 +54,9 @@ export function FinishedVideos() {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRender, setPreviewRender] = useState<Render | null>(null);
-
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [renderToDelete, setRenderToDelete] = useState<Render | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchRenders = async () => {
     setLoading(true);
@@ -126,6 +139,30 @@ export function FinishedVideos() {
     setCopiedField(fieldId);
     toast.success("Copied to clipboard");
     setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const handleDeleteRender = async () => {
+    if (!renderToDelete) return;
+    
+    setDeleting(true);
+    try {
+      const { error } = await supabase
+        .from("renders")
+        .delete()
+        .eq("id", renderToDelete.id);
+      
+      if (error) throw error;
+
+      toast.success("Render deleted successfully");
+      setRenders((prev) => prev.filter((r) => r.id !== renderToDelete.id));
+    } catch (error: any) {
+      console.error("Error deleting render:", error);
+      toast.error(error.message || "Failed to delete render");
+    } finally {
+      setDeleting(false);
+      setDeleteDialogOpen(false);
+      setRenderToDelete(null);
+    }
   };
 
   const getStatusBadge = (status: string) => {
@@ -268,6 +305,17 @@ export function FinishedVideos() {
                       >
                         <Download className="h-4 w-4 mr-1" />
                         Download
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => {
+                          setRenderToDelete(render);
+                          setDeleteDialogOpen(true);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
                   </TableCell>
@@ -427,6 +475,28 @@ export function FinishedVideos() {
         </TableBody>
       </Table>
       </Card>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Render</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this rendered video? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteRender}
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
