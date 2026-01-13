@@ -17,7 +17,6 @@ const passwordSchema = z.string().min(6, "Password must be at least 6 characters
 export default function Auth() {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
-  const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -55,35 +54,15 @@ export default function Auth() {
 
     setLoading(true);
     try {
-      if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: `${window.location.origin}/`,
-          },
-        });
-        if (error) {
-          if (error.message.includes("already registered")) {
-            toast.error("This email is already registered. Please sign in instead.");
-          } else {
-            throw error;
-          }
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) {
+        if (error.message.includes("Invalid login credentials")) {
+          toast.error("Invalid email or password. Please try again.");
         } else {
-          toast.success("Account created! You can now sign in.");
-          setIsSignUp(false);
-        }
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) {
-          if (error.message.includes("Invalid login credentials")) {
-            toast.error("Invalid email or password. Please try again.");
-          } else {
-            throw error;
-          }
+          throw error;
         }
       }
     } catch (error: any) {
@@ -124,13 +103,9 @@ export default function Auth() {
           <div className="flex justify-center mb-2">
             <img src={logoSvg} alt="StillDawn" className="h-16 w-16" />
           </div>
-          <CardTitle className="text-2xl">
-            {isSignUp ? "Create an account" : "Welcome back"}
-          </CardTitle>
+          <CardTitle className="text-2xl">Welcome back</CardTitle>
           <CardDescription className="text-muted-foreground">
-            {isSignUp
-              ? "Sign up to start creating AI-powered videos"
-              : "Sign in to continue to your projects"}
+            Sign in to continue to your projects
           </CardDescription>
         </CardHeader>
 
@@ -209,26 +184,11 @@ export default function Auth() {
             >
               {loading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
-              ) : isSignUp ? (
-                "Create account"
               ) : (
                 "Sign in"
               )}
             </Button>
           </form>
-
-          {/* Toggle Sign Up / Sign In */}
-          <p className="text-center text-sm text-muted-foreground">
-            {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
-            <button
-              type="button"
-              onClick={() => setIsSignUp(!isSignUp)}
-              className="text-primary hover:underline font-medium"
-              disabled={loading}
-            >
-              {isSignUp ? "Sign in" : "Sign up"}
-            </button>
-          </p>
         </CardContent>
       </Card>
     </div>
