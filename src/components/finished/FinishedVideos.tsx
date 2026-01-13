@@ -76,6 +76,27 @@ export function FinishedVideos() {
     });
   };
 
+  const handleDownload = async (url: string, filename: string) => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Download failed (${res.status})`);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      URL.revokeObjectURL(blobUrl);
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message || "Couldn't download video");
+    }
+  };
+
   const handleCopy = async (text: string, fieldId: string) => {
     await navigator.clipboard.writeText(text);
     setCopiedField(fieldId);
@@ -191,12 +212,10 @@ export function FinishedVideos() {
                       variant="outline"
                       size="sm"
                       disabled={!render.video_url}
-                      asChild
+                      onClick={() => handleDownload(render.video_url!, `${(render.project as any)?.title || 'video'}-${render.id}.mp4`)}
                     >
-                      <a href={render.video_url || "#"} download>
-                        <Download className="h-4 w-4 mr-1" />
-                        Download
-                      </a>
+                      <Download className="h-4 w-4 mr-1" />
+                      Download
                     </Button>
                   </TableCell>
                 </TableRow>

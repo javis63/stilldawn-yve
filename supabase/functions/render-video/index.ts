@@ -109,59 +109,101 @@ serve(async (req) => {
       throw new Error('No images available for video generation');
     }
 
-    // Step 2: Use Minimax Video-01 to create video from first image (faster than SVD)
-    // This creates a short animated video that we can use as the main output
-    console.log('Creating video from first image using Minimax...');
-    
+    // Step 2: Generate a base video, then mux the project's audio onto it
+    // (Muxing is fast via lucataco/video-audio-merge)
+    console.log('Creating base video from first image using minimax/video-01...');
+
     let finalVideoUrl: string | null = null;
-    
+
+    const extractUrl = (out: unknown): string | null => {
+      if (!out) return null;
+      if (typeof out === 'string') return out;
+      if (Array.isArray(out)) return typeof out[0] === 'string' ? out[0] : null;
+      if (typeof out === 'object') {
+        const o = out as Record<string, unknown>;
+        // common patterns
+        if (typeof o.url === 'string') return o.url;
+        if (typeof o.video === 'string') return o.video;
+        if (typeof o.output === 'string') return o.output;
+        if (o.output && typeof (o.output as any).url === 'string') return (o.output as any).url;
+        if (o.video && typeof (o.video as any).url === 'string') return (o.video as any).url;
+      }
+      return null;
+    };
+
     try {
-      // Use Minimax video-01 for faster video generation
-      const videoOutput = await replicate.run(
+      const baseOut = await replicate.run(
         "minimax/video-01",
         {
           input: {
             prompt: scenes[0]?.visual_prompt || "Cinematic slow motion video",
-            first_frame_image: validImages[0]
+            first_frame_image: validImages[0],
+          },
+        }
+      );
+
+      const baseVideoUrl = extractUrl(baseOut);
+      if (!baseVideoUrl) throw new Error('minimax/video-01 returned no video url');
+      console.log('Base video generated:', baseVideoUrl);
+
+      // If we have an uploaded narration audio, mux it into the mp4
+      let muxedVideoUrl = baseVideoUrl;
+      if (audioUrl) {
+        try {
+          console.log('Muxing narration audio onto base video...');
+          const muxOut = await replicate.run(
+            "lucataco/video-audio-merge",
+            {
+              input: {
+                video_file: baseVideoUrl,
+                audio_file: audioUrl,
+                duration_mode: "audio",
+              },
+            }
+          );
+
+          const muxUrl = extractUrl(muxOut);
+          if (muxUrl) {
+            muxedVideoUrl = muxUrl;
+            console.log('Audio mux complete:', muxedVideoUrl);
+          } else {
+            console.log('Mux model returned no url; keeping base video');
           }
+        } catch (muxErr) {
+          console.error('Audio mux failed; keeping base video:', muxErr);
         }
-      ) as string;
+      }
 
-      if (videoOutput) {
-        console.log('Video generated successfully');
-        
-        // Download and upload to our storage
-        const videoResponse = await fetch(videoOutput);
-        const videoBlob = await videoResponse.blob();
-        const videoArrayBuffer = await videoBlob.arrayBuffer();
-        const videoUint8Array = new Uint8Array(videoArrayBuffer);
-        
-        const fileName = `${projectId}/${renderId}.mp4`;
-        
-        const { error: uploadError } = await supabase.storage
-          .from('renders')
-          .upload(fileName, videoUint8Array, {
-            contentType: 'video/mp4',
-            upsert: true
-          });
+      // Download and upload final mp4 to our storage
+      const videoResponse = await fetch(muxedVideoUrl);
+      if (!videoResponse.ok) {
+        throw new Error(`Failed to download generated video: ${videoResponse.status}`);
+      }
 
-        if (uploadError) {
-          console.error('Upload error:', uploadError);
-          finalVideoUrl = videoOutput; // Use Replicate URL as fallback
-        } else {
-          const { data: publicUrl } = supabase.storage
-            .from('renders')
-            .getPublicUrl(fileName);
-          
-          finalVideoUrl = publicUrl.publicUrl;
-          console.log('Video uploaded to storage:', finalVideoUrl);
-        }
+      const contentType = videoResponse.headers.get('content-type') || 'video/mp4';
+      const videoArrayBuffer = await videoResponse.arrayBuffer();
+      const videoUint8Array = new Uint8Array(videoArrayBuffer);
+
+      const fileName = `${projectId}/${renderId}.mp4`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('renders')
+        .upload(fileName, videoUint8Array, {
+          contentType,
+          upsert: true,
+        });
+
+      if (uploadError) {
+        console.error('Upload error:', uploadError);
+        finalVideoUrl = muxedVideoUrl; // fallback to Replicate-hosted URL
+      } else {
+        const { data: publicUrl } = supabase.storage.from('renders').getPublicUrl(fileName);
+        finalVideoUrl = publicUrl.publicUrl;
+        console.log('Video uploaded to storage:', finalVideoUrl);
       }
     } catch (vidError) {
       console.error('Video generation error:', vidError);
-      
-      // Fallback: store images as slideshow data
-      finalVideoUrl = validImages[0]; // Use first image as thumbnail
+      finalVideoUrl = null;
     }
 
     // Generate SEO metadata using AI
