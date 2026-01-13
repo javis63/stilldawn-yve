@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Project } from "@/types/project";
 import { ProjectsList } from "./ProjectsList";
 import { ProjectDetails } from "./ProjectDetails";
 import { Card, CardContent } from "@/components/ui/card";
 import { FolderOpen } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 interface ProjectsTabProps {
   initialProjectId?: string | null;
@@ -11,14 +12,47 @@ interface ProjectsTabProps {
 
 export function ProjectsTab({ initialProjectId }: ProjectsTabProps) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Auto-select project when initialProjectId changes
+  useEffect(() => {
+    const fetchAndSelectProject = async () => {
+      if (initialProjectId && !selectedProject) {
+        const { data, error } = await supabase
+          .from("projects")
+          .select("*")
+          .eq("id", initialProjectId)
+          .single();
+
+        if (!error && data) {
+          setSelectedProject(data as Project);
+        }
+      }
+    };
+
+    fetchAndSelectProject();
+  }, [initialProjectId]);
 
   const handleSelectProject = (project: Project) => {
     setSelectedProject(project);
   };
 
-  const handleRefresh = () => {
-    // Will be implemented when we add real-time updates
-  };
+  const handleRefresh = useCallback(async () => {
+    // Refresh the selected project data
+    if (selectedProject) {
+      const { data, error } = await supabase
+        .from("projects")
+        .select("*")
+        .eq("id", selectedProject.id)
+        .single();
+
+      if (!error && data) {
+        setSelectedProject(data as Project);
+      }
+    }
+    // Trigger projects list refresh
+    setRefreshKey(prev => prev + 1);
+  }, [selectedProject]);
 
   return (
     <div className="flex gap-6 min-h-[70vh]">
@@ -26,7 +60,8 @@ export function ProjectsTab({ initialProjectId }: ProjectsTabProps) {
       <div className="w-80 shrink-0">
         <Card className="h-full bg-card border-border">
           <ProjectsList
-            selectedProjectId={selectedProject?.id || initialProjectId || null}
+            key={refreshKey}
+            selectedProjectId={selectedProject?.id || null}
             onSelectProject={handleSelectProject}
           />
         </Card>
