@@ -13,7 +13,9 @@ import {
   Upload,
   Copy,
   Check,
+  ImageIcon,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { Scene, TransitionType } from "@/types/project";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -23,6 +25,9 @@ interface SceneCardProps {
   isExpanded: boolean;
   onToggle: () => void;
   onUpdate: () => void;
+  projectId: string;
+  isThumbnailScene: boolean;
+  onSetThumbnail: (sceneId: string | null) => void;
 }
 
 const TRANSITIONS: { value: TransitionType; label: string }[] = [
@@ -41,7 +46,7 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
-export function SceneCard({ scene, isExpanded, onToggle, onUpdate }: SceneCardProps) {
+export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, isThumbnailScene, onSetThumbnail }: SceneCardProps) {
   const [visualPrompt, setVisualPrompt] = useState(scene.visual_prompt || "");
   const [transition, setTransition] = useState<TransitionType>(scene.transition);
   const [copied, setCopied] = useState(false);
@@ -161,21 +166,35 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate }: SceneCardPr
 
         <CollapsibleContent>
           <CardContent className="pt-0 space-y-4">
-            {/* Transition Selector */}
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-muted-foreground">Transition:</span>
-              <Select value={transition} onValueChange={handleTransitionChange}>
-                <SelectTrigger className="w-40 bg-background border-border">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TRANSITIONS.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>
-                      {t.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            {/* Thumbnail Toggle & Transition Selector */}
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <span className="text-sm text-muted-foreground">Transition:</span>
+                <Select value={transition} onValueChange={handleTransitionChange}>
+                  <SelectTrigger className="w-40 bg-background border-border">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TRANSITIONS.map((t) => (
+                      <SelectItem key={t.value} value={t.value}>
+                        {t.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Thumbnail Toggle */}
+              {scene.image_url && (
+                <div className="flex items-center gap-2">
+                  <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Use as YouTube Thumbnail</span>
+                  <Switch
+                    checked={isThumbnailScene}
+                    onCheckedChange={(checked) => onSetThumbnail(checked ? scene.id : null)}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Narration Text */}

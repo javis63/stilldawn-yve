@@ -21,6 +21,7 @@ export type Database = {
           created_at: string
           id: string
           status: Database["public"]["Enums"]["project_status"]
+          thumbnail_scene_id: string | null
           title: string
           transcript: string | null
           updated_at: string
@@ -32,6 +33,7 @@ export type Database = {
           created_at?: string
           id?: string
           status?: Database["public"]["Enums"]["project_status"]
+          thumbnail_scene_id?: string | null
           title: string
           transcript?: string | null
           updated_at?: string
@@ -43,12 +45,21 @@ export type Database = {
           created_at?: string
           id?: string
           status?: Database["public"]["Enums"]["project_status"]
+          thumbnail_scene_id?: string | null
           title?: string
           transcript?: string | null
           updated_at?: string
           user_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "projects_thumbnail_scene_id_fkey"
+            columns: ["thumbnail_scene_id"]
+            isOneToOne: false
+            referencedRelation: "scenes"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       renders: {
         Row: {

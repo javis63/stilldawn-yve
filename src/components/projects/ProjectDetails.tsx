@@ -35,11 +35,28 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   const [processing, setProcessing] = useState<string | null>(null);
   const [currentProject, setCurrentProject] = useState<Project>(project);
   const [renderProgress, setRenderProgress] = useState(0);
+  const [thumbnailSceneId, setThumbnailSceneId] = useState<string | null>(null);
 
   // Keep local project state in sync with prop
   useEffect(() => {
     setCurrentProject(project);
   }, [project]);
+
+  // Fetch thumbnail scene id from project
+  useEffect(() => {
+    const fetchThumbnailSceneId = async () => {
+      const { data } = await supabase
+        .from("projects")
+        .select("thumbnail_scene_id")
+        .eq("id", project.id)
+        .single();
+      
+      if (data?.thumbnail_scene_id) {
+        setThumbnailSceneId(data.thumbnail_scene_id);
+      }
+    };
+    fetchThumbnailSceneId();
+  }, [project.id]);
 
   const fetchScenes = async () => {
     try {
@@ -80,6 +97,22 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
 
   const collapseAll = () => {
     setExpandedScenes(new Set());
+  };
+
+  const handleSetThumbnail = async (sceneId: string | null) => {
+    try {
+      const { error } = await supabase
+        .from("projects")
+        .update({ thumbnail_scene_id: sceneId })
+        .eq("id", project.id);
+
+      if (error) throw error;
+      
+      setThumbnailSceneId(sceneId);
+      toast.success(sceneId ? "Thumbnail scene selected" : "Thumbnail scene cleared");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to set thumbnail scene");
+    }
   };
 
   const handleGenerateTimestamps = async () => {
@@ -173,6 +206,9 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     }, 3000);
 
     try {
+      // Find the thumbnail scene image URL if selected
+      const thumbnailScene = thumbnailSceneId ? scenes.find(s => s.id === thumbnailSceneId) : null;
+      
       const { data, error } = await supabase.functions.invoke('render-video', {
         body: {
           projectId: currentProject.id,
@@ -187,6 +223,8 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           })),
           audioUrl: currentProject.audio_url,
           audioDuration: currentProject.audio_duration,
+          thumbnailImageUrl: thumbnailScene?.image_url || null,
+          projectTitle: currentProject.title,
         },
       });
 
@@ -377,6 +415,9 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
               isExpanded={expandedScenes.has(scene.id)}
               onToggle={() => toggleScene(scene.id)}
               onUpdate={fetchScenes}
+              projectId={project.id}
+              isThumbnailScene={thumbnailSceneId === scene.id}
+              onSetThumbnail={handleSetThumbnail}
             />
           ))
         )}
