@@ -101,9 +101,50 @@ serve(async (req) => {
 
     const imageResults = await Promise.all(imagePromises);
     const sortedImages = imageResults.sort((a, b) => a.index - b.index);
-    const validImages = sortedImages.filter(r => r.url).map(r => r.url!);
+    let validImages = sortedImages.filter(r => r.url).map(r => r.url!);
 
     console.log(`Generated ${validImages.length} images`);
+
+    // Step 1b: Apply Ken Burns effect to each image (slow pan/zoom for cinematic feel)
+    console.log('Applying Ken Burns effect to images...');
+    const kenBurnsPromises = validImages.map(async (imageUrl, i) => {
+      try {
+        console.log(`Applying Ken Burns to image ${i + 1}/${validImages.length}`);
+        const output = await replicate.run(
+          "sniklaus/3d-ken-burns:61c026e96be87de9d7cb3a8e9a8f6bdcf9b6bc57c6ea0cc25c6ccc6cd5c98abe",
+          {
+            input: {
+              image: imageUrl,
+              // Slow, smooth movement - creates subtle parallax pan/zoom
+              shift_x: 0.0,
+              shift_y: 0.0,
+              focus_x: 0.5,
+              focus_y: 0.5,
+              // Zoom out slightly for pull-back reveal effect
+              zoom: 1.15,
+              // Longer duration for slower, more cinematic movement
+              duration: Math.min(5, (scenes[i]?.end_time - scenes[i]?.start_time) || 3),
+              fps: 25
+            }
+          }
+        ) as string | string[];
+        
+        const resultUrl = Array.isArray(output) ? output[0] : output;
+        console.log(`Ken Burns complete for image ${i + 1}`);
+        return { index: i, url: resultUrl, type: 'video' };
+      } catch (kbError) {
+        console.error(`Ken Burns failed for image ${i + 1}, using static:`, kbError);
+        return { index: i, url: imageUrl, type: 'image' };
+      }
+    });
+
+    const kenBurnsResults = await Promise.all(kenBurnsPromises);
+    const kenBurnsVideos = kenBurnsResults.sort((a, b) => a.index - b.index);
+    
+    // Update validImages with Ken Burns video URLs (or fallback to original images)
+    validImages = kenBurnsVideos.map(r => r.url);
+    const hasKenBurnsVideos = kenBurnsVideos.some(r => r.type === 'video');
+    console.log(`Ken Burns applied: ${kenBurnsVideos.filter(r => r.type === 'video').length}/${kenBurnsVideos.length} scenes`);
 
     if (validImages.length === 0) {
       throw new Error('No images available for video generation');
