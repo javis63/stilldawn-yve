@@ -27,8 +27,8 @@ export function MainLayout({ activeTab, onTabChange, children }: MainLayoutProps
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <img src={logoSvg} alt="StillDawn" className="h-8 w-8" />
-              <h1 className="text-2xl font-bold">StillDawn</h1>
+              <img src={logoSvg} alt="STILL DAWN STUDIOS" className="h-8 w-8" />
+              <h1 className="text-2xl font-bold">STILL DAWN STUDIOS</h1>
             </div>
             <div className="flex items-center gap-4">
               <span className="text-sm text-muted-foreground hidden sm:inline">
