@@ -119,13 +119,37 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   };
 
   const handleGenerateScenes = async () => {
+    if (!currentProject.transcript) {
+      toast.error("No transcript available. Generate timestamps first.");
+      return;
+    }
+
     setProcessing("scenes");
-    toast.info("Generating scenes with AI...");
-    // TODO: Implement Claude scene generation
-    setTimeout(() => {
+    toast.info("Generating scenes with AI... This may take a minute.");
+
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-scenes', {
+        body: {
+          projectId: currentProject.id,
+          transcript: currentProject.transcript,
+          audioDuration: currentProject.audio_duration,
+        },
+      });
+
+      if (error) throw error;
+      if (!data.success) throw new Error(data.error || 'Scene generation failed');
+
+      toast.success(`Generated ${data.count} scenes!`);
+      
+      // Refresh scenes list
+      await fetchScenes();
+      onRefresh();
+    } catch (error: any) {
+      console.error("Scene generation error:", error);
+      toast.error(error.message || "Failed to generate scenes");
+    } finally {
       setProcessing(null);
-      toast.success("Scenes generated!");
-    }, 2000);
+    }
   };
 
   const handleRenderProject = async () => {
