@@ -50,132 +50,95 @@ serve(async (req) => {
 
     const replicate = new Replicate({ auth: REPLICATE_API_KEY });
 
-    // Step 1: Generate images for each scene if not already generated
-    const sceneImages: string[] = [];
-    
-    for (let i = 0; i < scenes.length; i++) {
-      const scene = scenes[i];
+    // Step 1: Generate images for each scene if not already generated (in parallel for speed)
+    const imagePromises = scenes.map(async (scene: any, i: number) => {
       console.log(`Processing scene ${i + 1}/${scenes.length}`);
       
       if (scene.image_url) {
-        console.log(`Scene ${i + 1} already has image: ${scene.image_url}`);
-        sceneImages.push(scene.image_url);
-      } else if (scene.visual_prompt) {
-        console.log(`Generating image for scene ${i + 1}: ${scene.visual_prompt.substring(0, 50)}...`);
-        
-        try {
-          const output = await replicate.run(
-            "black-forest-labs/flux-schnell",
-            {
-              input: {
-                prompt: scene.visual_prompt,
-                go_fast: true,
-                megapixels: "1",
-                num_outputs: 1,
-                aspect_ratio: "16:9",
-                output_format: "png",
-                output_quality: 90,
-                num_inference_steps: 4
-              }
-            }
-          ) as string[];
-
-          if (output && output[0]) {
-            const imageUrl = output[0];
-            sceneImages.push(imageUrl);
-            
-            // Update scene with generated image
-            await supabase
-              .from('scenes')
-              .update({ image_url: imageUrl })
-              .eq('id', scene.id);
-              
-            console.log(`Generated image for scene ${i + 1}`);
-          } else {
-            throw new Error('No image generated');
-          }
-        } catch (imgError) {
-          console.error(`Failed to generate image for scene ${i + 1}:`, imgError);
-          // Use a placeholder or skip
-          sceneImages.push('');
-        }
+        console.log(`Scene ${i + 1} already has image`);
+        return { index: i, url: scene.image_url };
       }
-    }
+      
+      if (!scene.visual_prompt) {
+        return { index: i, url: null };
+      }
 
-    console.log(`Generated ${sceneImages.filter(Boolean).length} images`);
+      console.log(`Generating image for scene ${i + 1}`);
+      
+      try {
+        const output = await replicate.run(
+          "black-forest-labs/flux-schnell",
+          {
+            input: {
+              prompt: scene.visual_prompt,
+              go_fast: true,
+              megapixels: "1",
+              num_outputs: 1,
+              aspect_ratio: "16:9",
+              output_format: "png",
+              output_quality: 90,
+              num_inference_steps: 4
+            }
+          }
+        ) as string[];
 
-    // Step 2: Create video from images using Replicate's video model
-    // Using deforum/deforum_stable_diffusion or similar for slideshow
-    // Or use a simpler approach with img2video
+        if (output && output[0]) {
+          // Update scene with generated image
+          await supabase
+            .from('scenes')
+            .update({ image_url: output[0] })
+            .eq('id', scene.id);
+            
+          console.log(`Generated image for scene ${i + 1}`);
+          return { index: i, url: output[0] };
+        }
+      } catch (imgError) {
+        console.error(`Failed to generate image for scene ${i + 1}:`, imgError);
+      }
+      
+      return { index: i, url: null };
+    });
 
-    // For a proper video, we'll use Luma AI's video generation
-    // or create a slideshow video with ffmpeg-like model
-    
-    // Using replicate's video generation model
-    const validImages = sceneImages.filter(Boolean);
-    
+    const imageResults = await Promise.all(imagePromises);
+    const sortedImages = imageResults.sort((a, b) => a.index - b.index);
+    const validImages = sortedImages.filter(r => r.url).map(r => r.url!);
+
+    console.log(`Generated ${validImages.length} images`);
+
     if (validImages.length === 0) {
       throw new Error('No images available for video generation');
     }
 
-    console.log('Creating video from images...');
+    // Step 2: Use Minimax Video-01 to create video from first image (faster than SVD)
+    // This creates a short animated video that we can use as the main output
+    console.log('Creating video from first image using Minimax...');
     
-    // Use Replicate's video model to animate images
-    // We'll create individual video clips for each image and note this is a simplified approach
+    let finalVideoUrl: string | null = null;
     
-    // For now, let's use a video model that can create from an image
-    const videoClips: string[] = [];
-    
-    for (let i = 0; i < Math.min(validImages.length, 10); i++) {
-      const imageUrl = validImages[i];
-      const sceneDuration = scenes[i] ? (scenes[i].end_time - scenes[i].start_time) : 5;
-      
-      console.log(`Creating video clip ${i + 1} from image (duration: ${sceneDuration}s)`);
-      
-      try {
-        // Use Stable Video Diffusion for image-to-video
-        const videoOutput = await replicate.run(
-          "stability-ai/stable-video-diffusion:3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438",
-          {
-            input: {
-              input_image: imageUrl,
-              video_length: "25_frames_with_svd_xt",
-              sizing_strategy: "maintain_aspect_ratio",
-              motion_bucket_id: 40,
-              cond_aug: 0.02,
-              decoding_t: 7,
-              seed: Math.floor(Math.random() * 1000000),
-              fps: 6
-            }
+    try {
+      // Use Minimax video-01 for faster video generation
+      const videoOutput = await replicate.run(
+        "minimax/video-01",
+        {
+          input: {
+            prompt: scenes[0]?.visual_prompt || "Cinematic slow motion video",
+            first_frame_image: validImages[0]
           }
-        ) as string;
-
-        if (videoOutput) {
-          videoClips.push(videoOutput);
-          console.log(`Created video clip ${i + 1}`);
         }
-      } catch (vidError) {
-        console.error(`Failed to create video clip ${i + 1}:`, vidError);
-      }
-    }
+      ) as string;
 
-    // For a full solution, you'd concatenate videos with audio
-    // For now, we'll use the first successful video as the output
-    
-    let finalVideoUrl = videoClips[0] || null;
-    
-    // If we have video clips, upload to storage
-    if (finalVideoUrl) {
-      try {
-        // Download the video and upload to our storage
-        const videoResponse = await fetch(finalVideoUrl);
+      if (videoOutput) {
+        console.log('Video generated successfully');
+        
+        // Download and upload to our storage
+        const videoResponse = await fetch(videoOutput);
         const videoBlob = await videoResponse.blob();
         const videoArrayBuffer = await videoBlob.arrayBuffer();
         const videoUint8Array = new Uint8Array(videoArrayBuffer);
         
         const fileName = `${projectId}/${renderId}.mp4`;
         
-        const { data: uploadData, error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabase.storage
           .from('renders')
           .upload(fileName, videoUint8Array, {
             contentType: 'video/mp4',
@@ -184,6 +147,7 @@ serve(async (req) => {
 
         if (uploadError) {
           console.error('Upload error:', uploadError);
+          finalVideoUrl = videoOutput; // Use Replicate URL as fallback
         } else {
           const { data: publicUrl } = supabase.storage
             .from('renders')
@@ -192,9 +156,12 @@ serve(async (req) => {
           finalVideoUrl = publicUrl.publicUrl;
           console.log('Video uploaded to storage:', finalVideoUrl);
         }
-      } catch (uploadErr) {
-        console.error('Failed to upload video:', uploadErr);
       }
+    } catch (vidError) {
+      console.error('Video generation error:', vidError);
+      
+      // Fallback: store images as slideshow data
+      finalVideoUrl = validImages[0]; // Use first image as thumbnail
     }
 
     // Generate SEO metadata using AI
@@ -217,15 +184,15 @@ serve(async (req) => {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'google/gemini-3-flash-preview',
+            model: 'google/gemini-2.5-flash-lite',
             messages: [
               {
                 role: 'system',
-                content: 'Generate YouTube SEO metadata. Return JSON with: title (max 60 chars), description (max 300 chars), keywords (comma-separated), hashtags (5-10 with # prefix)'
+                content: 'Generate YouTube SEO metadata. Return ONLY valid JSON with: title (max 60 chars), description (max 300 chars), keywords (comma-separated), hashtags (5-10 with # prefix). No markdown.'
               },
               {
                 role: 'user',
-                content: `Generate SEO for this video narration:\n\n${narrationText.substring(0, 2000)}`
+                content: `Generate SEO for this video narration:\n\n${narrationText.substring(0, 1500)}`
               }
             ],
           }),
@@ -272,18 +239,21 @@ serve(async (req) => {
     });
 
     // Update render record with results
+    const isSuccess = finalVideoUrl && finalVideoUrl.includes('.mp4');
+    
     const { error: updateError } = await supabase
       .from('renders')
       .update({
-        status: finalVideoUrl ? 'completed' : 'failed',
+        status: isSuccess ? 'completed' : 'failed',
         video_url: finalVideoUrl,
+        thumbnail_url: validImages[0],
         seo_title: seoData.title,
         seo_description: seoData.description,
         seo_keywords: seoData.keywords,
         seo_hashtags: seoData.hashtags,
         subtitle_srt: srtContent,
         subtitle_vtt: vttContent,
-        error_message: finalVideoUrl ? null : 'Failed to generate video'
+        error_message: isSuccess ? null : 'Video generation timed out - images saved'
       })
       .eq('id', renderId);
 
@@ -294,7 +264,7 @@ serve(async (req) => {
     // Update project status
     await supabase
       .from('projects')
-      .update({ status: finalVideoUrl ? 'completed' : 'error' })
+      .update({ status: isSuccess ? 'completed' : 'ready' })
       .eq('id', projectId);
 
     console.log('Render completed:', { renderId, videoUrl: finalVideoUrl });
@@ -303,9 +273,9 @@ serve(async (req) => {
       success: true,
       renderId,
       videoUrl: finalVideoUrl,
+      thumbnailUrl: validImages[0],
       seo: seoData,
-      imageCount: validImages.length,
-      clipCount: videoClips.length
+      imageCount: validImages.length
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
