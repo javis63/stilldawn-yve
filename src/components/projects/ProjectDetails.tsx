@@ -155,58 +155,62 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   };
 
   const handleRenderProject = async () => {
+    if (scenes.length === 0) {
+      toast.error("No scenes to render. Generate scenes first.");
+      return;
+    }
+
     setProcessing("render");
-    setRenderProgress(0);
-    toast.info("Starting render...");
-    
-    // Simulate render progress (TODO: Replace with real FFmpeg rendering)
-    const interval = setInterval(async () => {
+    setRenderProgress(5);
+    toast.info("Starting video render with AI... This may take several minutes.");
+
+    // Progress simulation while waiting for actual render
+    const progressInterval = setInterval(() => {
       setRenderProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          return 100;
-        }
-        return prev + Math.random() * 15;
+        if (prev >= 90) return prev;
+        return prev + Math.random() * 5;
       });
-    }, 500);
+    }, 3000);
 
-    // Wait for "render" to complete, then create a render record
-    setTimeout(async () => {
-      clearInterval(interval);
+    try {
+      const { data, error } = await supabase.functions.invoke('render-video', {
+        body: {
+          projectId: currentProject.id,
+          scenes: scenes.map(s => ({
+            id: s.id,
+            scene_number: s.scene_number,
+            start_time: s.start_time,
+            end_time: s.end_time,
+            narration: s.narration,
+            visual_prompt: s.visual_prompt,
+            image_url: s.image_url,
+          })),
+          audioUrl: currentProject.audio_url,
+          audioDuration: currentProject.audio_duration,
+        },
+      });
+
+      clearInterval(progressInterval);
+
+      if (error) throw error;
+      if (!data.success) throw new Error(data.error || 'Render failed');
+
       setRenderProgress(100);
+      setCurrentProject(prev => ({ ...prev, status: "completed" as const }));
       
-      try {
-        // Create render record in database
-        const { data: renderData, error } = await supabase
-          .from("renders")
-          .insert({
-            project_id: currentProject.id,
-            status: "completed",
-            duration: currentProject.audio_duration,
-            // TODO: Replace with actual video URL after FFmpeg integration
-            video_url: null,
-          })
-          .select()
-          .single();
-
-        if (error) throw error;
-
-        // Update project status
-        await supabase
-          .from("projects")
-          .update({ status: "completed" })
-          .eq("id", currentProject.id);
-
-        setCurrentProject(prev => ({ ...prev, status: "completed" as const }));
-        toast.success("Render complete! Check the Finished tab to download.");
-        onRefresh();
-      } catch (error: any) {
-        console.error("Render error:", error);
-        toast.error("Failed to save render");
-      } finally {
-        setProcessing(null);
-      }
-    }, 4000);
+      // Refresh scenes to get updated image URLs
+      await fetchScenes();
+      
+      toast.success(`Render complete! Generated ${data.imageCount} images. Check the Finished tab.`);
+      onRefresh();
+    } catch (error: any) {
+      clearInterval(progressInterval);
+      console.error("Render error:", error);
+      toast.error(error.message || "Failed to render video");
+    } finally {
+      setProcessing(null);
+      setRenderProgress(0);
+    }
   };
 
   const getStatusBadge = (status: string) => {
