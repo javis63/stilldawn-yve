@@ -93,7 +93,26 @@ export function FinishedVideos() {
       URL.revokeObjectURL(blobUrl);
     } catch (e: any) {
       console.error(e);
-      toast.error(e?.message || "Couldn't download video");
+      toast.error(e?.message || "Couldn't download file");
+    }
+  };
+
+  const handleDownloadText = (content: string, filename: string, mime: string) => {
+    try {
+      const blob = new Blob([content], { type: mime });
+      const blobUrl = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      URL.revokeObjectURL(blobUrl);
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message || "Couldn't download subtitles");
     }
   };
 
@@ -235,29 +254,31 @@ export function FinishedVideos() {
                               variant="outline"
                               size="sm"
                               disabled={!render.subtitle_srt}
-                              asChild
+                              onClick={() =>
+                                handleDownloadText(
+                                  render.subtitle_srt || "",
+                                  `${(render.project as any)?.title || 'subtitles'}-${render.id}.srt`,
+                                  "text/plain;charset=utf-8"
+                                )
+                              }
                             >
-                              <a
-                                href={render.subtitle_srt ? `data:text/plain;charset=utf-8,${encodeURIComponent(render.subtitle_srt)}` : "#"}
-                                download="subtitles.srt"
-                              >
-                                <Download className="h-4 w-4 mr-1" />
-                                Download SRT
-                              </a>
+                              <Download className="h-4 w-4 mr-1" />
+                              Download SRT
                             </Button>
                             <Button
                               variant="outline"
                               size="sm"
                               disabled={!render.subtitle_vtt}
-                              asChild
+                              onClick={() =>
+                                handleDownloadText(
+                                  render.subtitle_vtt || "",
+                                  `${(render.project as any)?.title || 'subtitles'}-${render.id}.vtt`,
+                                  "text/vtt;charset=utf-8"
+                                )
+                              }
                             >
-                              <a
-                                href={render.subtitle_vtt ? `data:text/plain;charset=utf-8,${encodeURIComponent(render.subtitle_vtt)}` : "#"}
-                                download="subtitles.vtt"
-                              >
-                                <Download className="h-4 w-4 mr-1" />
-                                Download VTT
-                              </a>
+                              <Download className="h-4 w-4 mr-1" />
+                              Download VTT
                             </Button>
                           </div>
                         </div>

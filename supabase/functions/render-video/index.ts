@@ -109,9 +109,11 @@ serve(async (req) => {
       throw new Error('No images available for video generation');
     }
 
-    // Step 2: Generate a base video, then mux the project's audio onto it
-    // (Muxing is fast via lucataco/video-audio-merge)
-    console.log('Creating base video from first image using minimax/video-01...');
+    // Step 2: Create a FULL-LENGTH slideshow video from ALL scene images, then mux narration audio.
+    // Notes:
+    // - We use a CPU slideshow model (fast) so we avoid timeouts.
+    // - The model supports max 50 images and max 10s per image, so we repeat frames to match audio length.
+    console.log('Creating slideshow video from scene images...');
 
     let finalVideoUrl: string | null = null;
 
@@ -121,7 +123,6 @@ serve(async (req) => {
       if (Array.isArray(out)) return typeof out[0] === 'string' ? out[0] : null;
       if (typeof out === 'object') {
         const o = out as Record<string, unknown>;
-        // common patterns
         if (typeof o.url === 'string') return o.url;
         if (typeof o.video === 'string') return o.video;
         if (typeof o.output === 'string') return o.output;
@@ -131,32 +132,76 @@ serve(async (req) => {
       return null;
     };
 
+    // Keep the per-scene ordering (may contain nulls)
+    const orderedSceneImages = sortedImages.map((r) => r.url as string | null);
+
+    // Prefer audioDuration, otherwise infer from last scene end
+    const inferredDuration = Math.max(
+      ...scenes.map((s: any) => Number(s?.end_time ?? 0)),
+      0
+    );
+    const targetDurationSec = Number(audioDuration ?? 0) > 0 ? Number(audioDuration) : inferredDuration;
+
+    // Choose a duration-per-image so we stay within 2..50 frames
+    // duration_per_image is capped at 10s by the model.
+    let durationPerImage = Math.min(10, Math.max(0.1, Math.ceil(targetDurationSec / 50)));
+    if (!Number.isFinite(durationPerImage) || durationPerImage <= 0) durationPerImage = 1;
+
+    const imagesForSlideshow: string[] = [];
+    for (let i = 0; i < scenes.length; i++) {
+      const scene = scenes[i];
+      const img = orderedSceneImages[i] || validImages[0];
+      if (!img) continue;
+
+      const start = Number(scene?.start_time ?? 0);
+      const end = Number(scene?.end_time ?? start + durationPerImage);
+      const sceneDur = Math.max(0.1, end - start);
+      const repeats = Math.max(1, Math.ceil(sceneDur / durationPerImage));
+
+      for (let r = 0; r < repeats; r++) imagesForSlideshow.push(img);
+    }
+
+    // Enforce model limits (2..50)
+    while (imagesForSlideshow.length < 2 && validImages[0]) imagesForSlideshow.push(validImages[0]);
+    if (imagesForSlideshow.length > 50) {
+      // If we're still too long, we cap to 50 frames (video-audio-merge can truncate/extend based on duration_mode)
+      imagesForSlideshow.length = 50;
+    }
+
+    console.log(`Slideshow frames: ${imagesForSlideshow.length}, duration_per_image: ${durationPerImage}s, target: ${targetDurationSec}s`);
+
     try {
-      const baseOut = await replicate.run(
-        "minimax/video-01",
+      // 2a) Create slideshow mp4
+      const slideshowOut = await replicate.run(
+        "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
         {
           input: {
-            prompt: scenes[0]?.visual_prompt || "Cinematic slow motion video",
-            first_frame_image: validImages[0],
+            images: imagesForSlideshow,
+            duration_per_image: durationPerImage,
+            frame_rate: 30,
+            resolution: "1080p",
+            aspect_ratio: "auto",
+            transition_type: "none",
           },
         }
       );
 
-      const baseVideoUrl = extractUrl(baseOut);
-      if (!baseVideoUrl) throw new Error('minimax/video-01 returned no video url');
-      console.log('Base video generated:', baseVideoUrl);
+      const slideshowVideoUrl = extractUrl(slideshowOut);
+      if (!slideshowVideoUrl) throw new Error('slideshow model returned no video url');
+      console.log('Slideshow video generated:', slideshowVideoUrl);
 
-      // If we have an uploaded narration audio, mux it into the mp4
-      let muxedVideoUrl = baseVideoUrl;
+      // 2b) Mux narration audio onto the mp4
+      let muxedVideoUrl = slideshowVideoUrl;
       if (audioUrl) {
         try {
-          console.log('Muxing narration audio onto base video...');
+          console.log('Muxing narration audio...');
           const muxOut = await replicate.run(
             "lucataco/video-audio-merge",
             {
               input: {
-                video_file: baseVideoUrl,
+                video_file: slideshowVideoUrl,
                 audio_file: audioUrl,
+                // Prefer matching the audio length; if slideshow was capped, this will extend video with last frame.
                 duration_mode: "audio",
               },
             }
@@ -167,14 +212,16 @@ serve(async (req) => {
             muxedVideoUrl = muxUrl;
             console.log('Audio mux complete:', muxedVideoUrl);
           } else {
-            console.log('Mux model returned no url; keeping base video');
+            console.log('Mux model returned no url; keeping slideshow video');
           }
         } catch (muxErr) {
-          console.error('Audio mux failed; keeping base video:', muxErr);
+          console.error('Audio mux failed; keeping slideshow video:', muxErr);
         }
+      } else {
+        console.log('No audioUrl provided; returning silent slideshow.');
       }
 
-      // Download and upload final mp4 to our storage
+      // 2c) Download and upload final mp4 to storage
       const videoResponse = await fetch(muxedVideoUrl);
       if (!videoResponse.ok) {
         throw new Error(`Failed to download generated video: ${videoResponse.status}`);
@@ -281,7 +328,7 @@ serve(async (req) => {
     });
 
     // Update render record with results
-    const isSuccess = finalVideoUrl && finalVideoUrl.includes('.mp4');
+    const isSuccess = !!finalVideoUrl;
     
     const { error: updateError } = await supabase
       .from('renders')
@@ -295,7 +342,7 @@ serve(async (req) => {
         seo_hashtags: seoData.hashtags,
         subtitle_srt: srtContent,
         subtitle_vtt: vttContent,
-        error_message: isSuccess ? null : 'Video generation timed out - images saved'
+        error_message: isSuccess ? null : 'Failed to generate final mp4'
       })
       .eq('id', renderId);
 
