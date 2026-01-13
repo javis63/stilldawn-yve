@@ -160,17 +160,53 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     toast.info("Starting render...");
     
     // Simulate render progress (TODO: Replace with real FFmpeg rendering)
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
       setRenderProgress((prev) => {
         if (prev >= 100) {
           clearInterval(interval);
-          setProcessing(null);
-          toast.success("Render complete!");
           return 100;
         }
         return prev + Math.random() * 15;
       });
     }, 500);
+
+    // Wait for "render" to complete, then create a render record
+    setTimeout(async () => {
+      clearInterval(interval);
+      setRenderProgress(100);
+      
+      try {
+        // Create render record in database
+        const { data: renderData, error } = await supabase
+          .from("renders")
+          .insert({
+            project_id: currentProject.id,
+            status: "completed",
+            duration: currentProject.audio_duration,
+            // TODO: Replace with actual video URL after FFmpeg integration
+            video_url: null,
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        // Update project status
+        await supabase
+          .from("projects")
+          .update({ status: "completed" })
+          .eq("id", currentProject.id);
+
+        setCurrentProject(prev => ({ ...prev, status: "completed" as const }));
+        toast.success("Render complete! Check the Finished tab to download.");
+        onRefresh();
+      } catch (error: any) {
+        console.error("Render error:", error);
+        toast.error("Failed to save render");
+      } finally {
+        setProcessing(null);
+      }
+    }, 4000);
   };
 
   const getStatusBadge = (status: string) => {
