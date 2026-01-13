@@ -2,3 +2,6 @@ project_id = "eofedcncgpcpvxoibkjm"
 
 [functions.transcribe]
 verify_jwt = false
+
+[functions.generate-scenes]
+verify_jwt = false
