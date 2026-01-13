@@ -26,6 +26,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { Render } from "@/types/project";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
+import { VideoPreviewDialog } from "./VideoPreviewDialog";
+
 
 function formatDuration(seconds: number | null): string {
   if (!seconds) return "--:--";
@@ -39,6 +41,9 @@ export function FinishedVideos() {
   const [loading, setLoading] = useState(true);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewRender, setPreviewRender] = useState<Render | null>(null);
+
 
   const fetchRenders = async () => {
     setLoading(true);
@@ -167,7 +172,18 @@ export function FinishedVideos() {
   }
 
   return (
-    <Card className="bg-card border-border">
+    <>
+      <VideoPreviewDialog
+        open={previewOpen}
+        onOpenChange={(open) => {
+          setPreviewOpen(open);
+          if (!open) setPreviewRender(null);
+        }}
+        render={previewRender}
+        title={(previewRender?.project as any)?.title || "Video preview"}
+      />
+
+      <Card className="bg-card border-border">
       <Table>
         <TableHeader>
           <TableRow className="border-border hover:bg-transparent">
@@ -227,15 +243,33 @@ export function FinishedVideos() {
                   </TableCell>
                   <TableCell>{getStatusBadge(render.status)}</TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!render.video_url}
-                      onClick={() => handleDownload(render.video_url!, `${(render.project as any)?.title || 'video'}-${render.id}.mp4`)}
-                    >
-                      <Download className="h-4 w-4 mr-1" />
-                      Download
-                    </Button>
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!render.video_url}
+                        onClick={() => {
+                          setPreviewRender(render);
+                          setPreviewOpen(true);
+                        }}
+                      >
+                        Preview
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!render.video_url}
+                        onClick={() =>
+                          handleDownload(
+                            render.video_url!,
+                            `${(render.project as any)?.title || "video"}-${render.id}.mp4`
+                          )
+                        }
+                      >
+                        <Download className="h-4 w-4 mr-1" />
+                        Download
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
 
@@ -392,6 +426,7 @@ export function FinishedVideos() {
           ))}
         </TableBody>
       </Table>
-    </Card>
+      </Card>
+    </>
   );
 }

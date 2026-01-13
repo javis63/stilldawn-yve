@@ -116,19 +116,44 @@ serve(async (req) => {
     console.log('Creating slideshow video from scene images...');
 
     let finalVideoUrl: string | null = null;
+    let audioMuxWarning: string | null = null;
 
     const extractUrl = (out: unknown): string | null => {
+      const firstString = (v: unknown): string | null =>
+        Array.isArray(v) && typeof v[0] === "string" ? (v[0] as string) : null;
+
       if (!out) return null;
-      if (typeof out === 'string') return out;
-      if (Array.isArray(out)) return typeof out[0] === 'string' ? out[0] : null;
-      if (typeof out === 'object') {
+      if (typeof out === "string") return out;
+      if (Array.isArray(out)) return typeof out[0] === "string" ? out[0] : null;
+
+      if (typeof out === "object") {
         const o = out as Record<string, unknown>;
-        if (typeof o.url === 'string') return o.url;
-        if (typeof o.video === 'string') return o.video;
-        if (typeof o.output === 'string') return o.output;
-        if (o.output && typeof (o.output as any).url === 'string') return (o.output as any).url;
-        if (o.video && typeof (o.video as any).url === 'string') return (o.video as any).url;
+
+        if (typeof o.url === "string") return o.url;
+        if (typeof o.video === "string") return o.video;
+        if (typeof o.output === "string") return o.output;
+
+        const videoArr = firstString(o.video);
+        if (videoArr) return videoArr;
+
+        const outputArr = firstString(o.output);
+        if (outputArr) return outputArr;
+
+        // Common nested shapes: { output: { url } }, { output: { video } }, etc.
+        if (o.output && typeof o.output === "object") {
+          const oo = o.output as Record<string, unknown>;
+          if (typeof oo.url === "string") return oo.url;
+          if (typeof oo.video === "string") return oo.video;
+          if (typeof oo.output === "string") return oo.output;
+
+          const ooVideoArr = firstString(oo.video);
+          if (ooVideoArr) return ooVideoArr;
+
+          const ooOutputArr = firstString(oo.output);
+          if (ooOutputArr) return ooOutputArr;
+        }
       }
+
       return null;
     };
 
@@ -190,18 +215,19 @@ serve(async (req) => {
       if (!slideshowVideoUrl) throw new Error('slideshow model returned no video url');
       console.log('Slideshow video generated:', slideshowVideoUrl);
 
-      // 2b) Mux narration audio onto the mp4
+       // 2b) Mux narration audio onto the mp4
       let muxedVideoUrl = slideshowVideoUrl;
       if (audioUrl) {
         try {
           console.log('Muxing narration audio...');
+
           const muxOut = await replicate.run(
             "lucataco/video-audio-merge",
             {
               input: {
                 video_file: slideshowVideoUrl,
                 audio_file: audioUrl,
-                // Prefer matching the audio length; if slideshow was capped, this will extend video with last frame.
+                // Match the audio length; extend video with frozen frame if needed.
                 duration_mode: "audio",
               },
             }
@@ -212,13 +238,16 @@ serve(async (req) => {
             muxedVideoUrl = muxUrl;
             console.log('Audio mux complete:', muxedVideoUrl);
           } else {
-            console.log('Mux model returned no url; keeping slideshow video');
+            audioMuxWarning = 'Audio mux returned no video URL (render is likely silent).';
+            console.warn(audioMuxWarning, muxOut);
           }
         } catch (muxErr) {
-          console.error('Audio mux failed; keeping slideshow video:', muxErr);
+          audioMuxWarning = `Audio mux failed (render is likely silent). ${(muxErr as Error)?.message ?? ''}`.trim();
+          console.error(audioMuxWarning, muxErr);
         }
       } else {
-        console.log('No audioUrl provided; returning silent slideshow.');
+        audioMuxWarning = 'No audioUrl provided; render is silent.';
+        console.log(audioMuxWarning);
       }
 
       // 2c) Download and upload final mp4 to storage
@@ -329,7 +358,7 @@ serve(async (req) => {
 
     // Update render record with results
     const isSuccess = !!finalVideoUrl;
-    
+
     const { error: updateError } = await supabase
       .from('renders')
       .update({
@@ -342,7 +371,8 @@ serve(async (req) => {
         seo_hashtags: seoData.hashtags,
         subtitle_srt: srtContent,
         subtitle_vtt: vttContent,
-        error_message: isSuccess ? null : 'Failed to generate final mp4'
+        // If muxing fails we still return a video, but flag it clearly.
+        error_message: isSuccess ? (audioMuxWarning ?? null) : 'Failed to generate final mp4',
       })
       .eq('id', renderId);
 
