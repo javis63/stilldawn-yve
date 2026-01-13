@@ -7,6 +7,117 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Generate TTS audio using OpenAI
+async function generateTTSAudio(
+  text: string,
+  supabase: any,
+  projectId: string,
+  renderId: string
+): Promise<{ url: string; duration: number } | null> {
+  const openaiApiKey = Deno.env.get('OPENAI_API_KEY');
+  
+  if (!openaiApiKey) {
+    console.log('[TTS] No OpenAI API key configured, skipping TTS');
+    return null;
+  }
+
+  try {
+    console.log(`[TTS] Generating audio for ${text.length} characters...`);
+    
+    // OpenAI TTS has a 4096 character limit per request, so we need to chunk
+    const maxChunkSize = 4000;
+    const chunks: string[] = [];
+    
+    // Split text into chunks at sentence boundaries
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    let currentChunk = '';
+    
+    for (const sentence of sentences) {
+      if ((currentChunk + sentence).length > maxChunkSize) {
+        if (currentChunk) chunks.push(currentChunk.trim());
+        currentChunk = sentence;
+      } else {
+        currentChunk += sentence;
+      }
+    }
+    if (currentChunk.trim()) chunks.push(currentChunk.trim());
+    
+    console.log(`[TTS] Split into ${chunks.length} chunks`);
+    
+    // Generate audio for each chunk
+    const audioBuffers: ArrayBuffer[] = [];
+    
+    for (let i = 0; i < chunks.length; i++) {
+      console.log(`[TTS] Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`);
+      
+      const response = await fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'tts-1',
+          input: chunks[i],
+          voice: 'onyx', // Natural, warm male voice
+          response_format: 'mp3',
+          speed: 1.0,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[TTS] OpenAI error for chunk ${i + 1}:`, errorText);
+        throw new Error(`TTS failed: ${response.status}`);
+      }
+
+      const audioBuffer = await response.arrayBuffer();
+      audioBuffers.push(audioBuffer);
+      console.log(`[TTS] Chunk ${i + 1} complete: ${audioBuffer.byteLength} bytes`);
+    }
+
+    // Combine all audio buffers
+    const totalLength = audioBuffers.reduce((acc, buf) => acc + buf.byteLength, 0);
+    const combinedBuffer = new Uint8Array(totalLength);
+    let offset = 0;
+    
+    for (const buffer of audioBuffers) {
+      combinedBuffer.set(new Uint8Array(buffer), offset);
+      offset += buffer.byteLength;
+    }
+
+    // Upload to storage
+    const audioFileName = `${projectId}/${renderId}_tts.mp3`;
+    const { error: uploadError } = await supabase.storage
+      .from('renders')
+      .upload(audioFileName, combinedBuffer, {
+        contentType: 'audio/mpeg',
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error('[TTS] Upload error:', uploadError);
+      throw uploadError;
+    }
+
+    const { data: publicUrl } = supabase.storage.from('renders').getPublicUrl(audioFileName);
+    
+    // Estimate duration: ~150 words per minute, average 5 chars per word
+    const wordCount = text.split(/\s+/).length;
+    const estimatedDuration = (wordCount / 150) * 60;
+    
+    console.log(`[TTS] Audio generated: ${publicUrl.publicUrl}, estimated ${estimatedDuration.toFixed(1)}s`);
+    
+    return {
+      url: publicUrl.publicUrl,
+      duration: estimatedDuration,
+    };
+  } catch (error) {
+    console.error('[TTS] Error generating audio:', error);
+    return null;
+  }
+}
+
 // Background render processing function
 async function processRender(
   projectId: string,
@@ -25,6 +136,25 @@ async function processRender(
 
   try {
     console.log(`[BG] Starting render ${renderId} for project ${projectId}`);
+
+    // Step 0: Generate TTS audio if no audio provided
+    let finalAudioUrl = audioUrl;
+    let finalAudioDuration = audioDuration;
+    
+    if (!audioUrl) {
+      console.log('[BG] No audio provided, generating TTS...');
+      const fullNarration = scenes.map((s: any) => s.narration).join(' ');
+      
+      if (fullNarration.trim()) {
+        const ttsResult = await generateTTSAudio(fullNarration, supabase, projectId, renderId);
+        
+        if (ttsResult) {
+          finalAudioUrl = ttsResult.url;
+          finalAudioDuration = ttsResult.duration;
+          console.log(`[BG] TTS audio ready: ${finalAudioUrl}`);
+        }
+      }
+    }
 
     // Step 1: Generate images for each scene if not already generated
     console.log(`[BG] Processing ${scenes.length} scenes for images...`);
@@ -162,7 +292,7 @@ async function processRender(
 
     const orderedSceneImages = sortedImages.map((r) => r.url as string | null);
     const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
-    const targetDurationSec = Number(audioDuration ?? 0) > 0 ? Number(audioDuration) : inferredDuration;
+    const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
 
     let durationPerImage = Math.min(10, Math.max(0.1, Math.ceil(targetDurationSec / 50)));
     if (!Number.isFinite(durationPerImage) || durationPerImage <= 0) durationPerImage = 1;
@@ -206,7 +336,7 @@ async function processRender(
       console.log('[BG] Slideshow video generated:', slideshowVideoUrl);
 
       let muxedVideoUrl = slideshowVideoUrl;
-      if (audioUrl) {
+      if (finalAudioUrl) {
         try {
           console.log('[BG] Muxing narration audio...');
           const muxOut = await replicate.run(
@@ -214,7 +344,7 @@ async function processRender(
             {
               input: {
                 video_file: slideshowVideoUrl,
-                audio_file: audioUrl,
+                audio_file: finalAudioUrl,
                 duration_mode: "audio",
               },
             }
