@@ -7,55 +7,30 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+// Background render processing function
+async function processRender(
+  projectId: string,
+  scenes: any[],
+  audioUrl: string | null,
+  audioDuration: number | null,
+  thumbnailImageUrl: string | null,
+  projectTitle: string | null,
+  renderId: string
+) {
+  const REPLICATE_API_KEY = Deno.env.get('REPLICATE_API_KEY')!;
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabase = createClient(supabaseUrl, supabaseKey);
+  const replicate = new Replicate({ auth: REPLICATE_API_KEY });
 
   try {
-    const { projectId, scenes, audioUrl, audioDuration, thumbnailImageUrl, projectTitle } = await req.json();
-    
-    if (!projectId || !scenes || scenes.length === 0) {
-      throw new Error('Missing projectId or scenes');
-    }
+    console.log(`[BG] Starting render ${renderId} for project ${projectId}`);
 
-    const REPLICATE_API_KEY = Deno.env.get('REPLICATE_API_KEY');
-    if (!REPLICATE_API_KEY) {
-      throw new Error('REPLICATE_API_KEY is not configured');
-    }
-
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
-    console.log(`Rendering video for project ${projectId} with ${scenes.length} scenes`);
-
-    // Create a render record with "rendering" status
-    const { data: renderRecord, error: renderError } = await supabase
-      .from('renders')
-      .insert({
-        project_id: projectId,
-        status: 'rendering',
-        duration: audioDuration,
-      })
-      .select()
-      .single();
-
-    if (renderError) {
-      throw new Error(`Failed to create render record: ${renderError.message}`);
-    }
-
-    const renderId = renderRecord.id;
-    console.log(`Created render record: ${renderId}`);
-
-    const replicate = new Replicate({ auth: REPLICATE_API_KEY });
-
-    // Step 1: Generate images for each scene if not already generated (in parallel for speed)
+    // Step 1: Generate images for each scene if not already generated
+    console.log(`[BG] Processing ${scenes.length} scenes for images...`);
     const imagePromises = scenes.map(async (scene: any, i: number) => {
-      console.log(`Processing scene ${i + 1}/${scenes.length}`);
-      
       if (scene.image_url) {
-        console.log(`Scene ${i + 1} already has image`);
+        console.log(`[BG] Scene ${i + 1} already has image`);
         return { index: i, url: scene.image_url };
       }
       
@@ -63,7 +38,7 @@ serve(async (req) => {
         return { index: i, url: null };
       }
 
-      console.log(`Generating image for scene ${i + 1}`);
+      console.log(`[BG] Generating image for scene ${i + 1}`);
       
       try {
         const output = await replicate.run(
@@ -83,17 +58,16 @@ serve(async (req) => {
         ) as string[];
 
         if (output && output[0]) {
-          // Update scene with generated image
           await supabase
             .from('scenes')
             .update({ image_url: output[0] })
             .eq('id', scene.id);
             
-          console.log(`Generated image for scene ${i + 1}`);
+          console.log(`[BG] Generated image for scene ${i + 1}`);
           return { index: i, url: output[0] };
         }
       } catch (imgError) {
-        console.error(`Failed to generate image for scene ${i + 1}:`, imgError);
+        console.error(`[BG] Failed to generate image for scene ${i + 1}:`, imgError);
       }
       
       return { index: i, url: null };
@@ -103,26 +77,23 @@ serve(async (req) => {
     const sortedImages = imageResults.sort((a, b) => a.index - b.index);
     let validImages = sortedImages.filter(r => r.url).map(r => r.url!);
 
-    console.log(`Generated ${validImages.length} images`);
+    console.log(`[BG] Generated ${validImages.length} images`);
 
-    // Step 1b: Apply Ken Burns effect to each image (slow pan/zoom for cinematic feel)
-    console.log('Applying Ken Burns effect to images...');
+    // Step 1b: Apply Ken Burns effect
+    console.log('[BG] Applying Ken Burns effect...');
     const kenBurnsPromises = validImages.map(async (imageUrl, i) => {
       try {
-        console.log(`Applying Ken Burns to image ${i + 1}/${validImages.length}`);
+        console.log(`[BG] Ken Burns for image ${i + 1}/${validImages.length}`);
         const output = await replicate.run(
           "sniklaus/3d-ken-burns:61c026e96be87de9d7cb3a8e9a8f6bdcf9b6bc57c6ea0cc25c6ccc6cd5c98abe",
           {
             input: {
               image: imageUrl,
-              // Slow, smooth movement - creates subtle parallax pan/zoom
               shift_x: 0.0,
               shift_y: 0.0,
               focus_x: 0.5,
               focus_y: 0.5,
-              // Zoom out slightly for pull-back reveal effect
               zoom: 1.15,
-              // Longer duration for slower, more cinematic movement
               duration: Math.min(5, (scenes[i]?.end_time - scenes[i]?.start_time) || 3),
               fps: 25
             }
@@ -130,31 +101,25 @@ serve(async (req) => {
         ) as string | string[];
         
         const resultUrl = Array.isArray(output) ? output[0] : output;
-        console.log(`Ken Burns complete for image ${i + 1}`);
+        console.log(`[BG] Ken Burns complete for image ${i + 1}`);
         return { index: i, url: resultUrl, type: 'video' };
       } catch (kbError) {
-        console.error(`Ken Burns failed for image ${i + 1}, using static:`, kbError);
+        console.error(`[BG] Ken Burns failed for image ${i + 1}:`, kbError);
         return { index: i, url: imageUrl, type: 'image' };
       }
     });
 
     const kenBurnsResults = await Promise.all(kenBurnsPromises);
     const kenBurnsVideos = kenBurnsResults.sort((a, b) => a.index - b.index);
-    
-    // Update validImages with Ken Burns video URLs (or fallback to original images)
     validImages = kenBurnsVideos.map(r => r.url);
-    const hasKenBurnsVideos = kenBurnsVideos.some(r => r.type === 'video');
-    console.log(`Ken Burns applied: ${kenBurnsVideos.filter(r => r.type === 'video').length}/${kenBurnsVideos.length} scenes`);
+    console.log(`[BG] Ken Burns: ${kenBurnsVideos.filter(r => r.type === 'video').length}/${kenBurnsVideos.length} scenes`);
 
     if (validImages.length === 0) {
       throw new Error('No images available for video generation');
     }
 
-    // Step 2: Create a FULL-LENGTH slideshow video from ALL scene images, then mux narration audio.
-    // Notes:
-    // - We use a CPU slideshow model (fast) so we avoid timeouts.
-    // - The model supports max 50 images and max 10s per image, so we repeat frames to match audio length.
-    console.log('Creating slideshow video from scene images...');
+    // Step 2: Create slideshow video
+    console.log('[BG] Creating slideshow video...');
 
     let finalVideoUrl: string | null = null;
     let audioMuxWarning: string | null = null;
@@ -169,7 +134,6 @@ serve(async (req) => {
 
       if (typeof out === "object") {
         const o = out as Record<string, unknown>;
-
         if (typeof o.url === "string") return o.url;
         if (typeof o.video === "string") return o.video;
         if (typeof o.output === "string") return o.output;
@@ -180,7 +144,6 @@ serve(async (req) => {
         const outputArr = firstString(o.output);
         if (outputArr) return outputArr;
 
-        // Common nested shapes: { output: { url } }, { output: { video } }, etc.
         if (o.output && typeof o.output === "object") {
           const oo = o.output as Record<string, unknown>;
           if (typeof oo.url === "string") return oo.url;
@@ -194,22 +157,13 @@ serve(async (req) => {
           if (ooOutputArr) return ooOutputArr;
         }
       }
-
       return null;
     };
 
-    // Keep the per-scene ordering (may contain nulls)
     const orderedSceneImages = sortedImages.map((r) => r.url as string | null);
-
-    // Prefer audioDuration, otherwise infer from last scene end
-    const inferredDuration = Math.max(
-      ...scenes.map((s: any) => Number(s?.end_time ?? 0)),
-      0
-    );
+    const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
     const targetDurationSec = Number(audioDuration ?? 0) > 0 ? Number(audioDuration) : inferredDuration;
 
-    // Choose a duration-per-image so we stay within 2..50 frames
-    // duration_per_image is capped at 10s by the model.
     let durationPerImage = Math.min(10, Math.max(0.1, Math.ceil(targetDurationSec / 50)));
     if (!Number.isFinite(durationPerImage) || durationPerImage <= 0) durationPerImage = 1;
 
@@ -227,17 +181,12 @@ serve(async (req) => {
       for (let r = 0; r < repeats; r++) imagesForSlideshow.push(img);
     }
 
-    // Enforce model limits (2..50)
     while (imagesForSlideshow.length < 2 && validImages[0]) imagesForSlideshow.push(validImages[0]);
-    if (imagesForSlideshow.length > 50) {
-      // If we're still too long, we cap to 50 frames (video-audio-merge can truncate/extend based on duration_mode)
-      imagesForSlideshow.length = 50;
-    }
+    if (imagesForSlideshow.length > 50) imagesForSlideshow.length = 50;
 
-    console.log(`Slideshow frames: ${imagesForSlideshow.length}, duration_per_image: ${durationPerImage}s, target: ${targetDurationSec}s`);
+    console.log(`[BG] Slideshow: ${imagesForSlideshow.length} frames, ${durationPerImage}s each, target: ${targetDurationSec}s`);
 
     try {
-      // 2a) Create slideshow mp4
       const slideshowOut = await replicate.run(
         "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
         {
@@ -254,21 +203,18 @@ serve(async (req) => {
 
       const slideshowVideoUrl = extractUrl(slideshowOut);
       if (!slideshowVideoUrl) throw new Error('slideshow model returned no video url');
-      console.log('Slideshow video generated:', slideshowVideoUrl);
+      console.log('[BG] Slideshow video generated:', slideshowVideoUrl);
 
-       // 2b) Mux narration audio onto the mp4
       let muxedVideoUrl = slideshowVideoUrl;
       if (audioUrl) {
         try {
-          console.log('Muxing narration audio...');
-
+          console.log('[BG] Muxing narration audio...');
           const muxOut = await replicate.run(
             "lucataco/video-audio-merge",
             {
               input: {
                 video_file: slideshowVideoUrl,
                 audio_file: audioUrl,
-                // Match the audio length; extend video with frozen frame if needed.
                 duration_mode: "audio",
               },
             }
@@ -277,24 +223,24 @@ serve(async (req) => {
           const muxUrl = extractUrl(muxOut);
           if (muxUrl) {
             muxedVideoUrl = muxUrl;
-            console.log('Audio mux complete:', muxedVideoUrl);
+            console.log('[BG] Audio mux complete:', muxedVideoUrl);
           } else {
-            audioMuxWarning = 'Audio mux returned no video URL (render is likely silent).';
-            console.warn(audioMuxWarning, muxOut);
+            audioMuxWarning = 'Audio mux returned no video URL';
+            console.warn('[BG]', audioMuxWarning);
           }
         } catch (muxErr) {
-          audioMuxWarning = `Audio mux failed (render is likely silent). ${(muxErr as Error)?.message ?? ''}`.trim();
-          console.error(audioMuxWarning, muxErr);
+          audioMuxWarning = `Audio mux failed: ${(muxErr as Error)?.message ?? ''}`;
+          console.error('[BG]', audioMuxWarning);
         }
       } else {
         audioMuxWarning = 'No audioUrl provided; render is silent.';
-        console.log(audioMuxWarning);
       }
 
-      // 2c) Download and upload final mp4 to storage
+      // Upload final video to storage
+      console.log('[BG] Uploading video to storage...');
       const videoResponse = await fetch(muxedVideoUrl);
       if (!videoResponse.ok) {
-        throw new Error(`Failed to download generated video: ${videoResponse.status}`);
+        throw new Error(`Failed to download video: ${videoResponse.status}`);
       }
 
       const contentType = videoResponse.headers.get('content-type') || 'video/mp4';
@@ -311,29 +257,25 @@ serve(async (req) => {
         });
 
       if (uploadError) {
-        console.error('Upload error:', uploadError);
-        finalVideoUrl = muxedVideoUrl; // fallback to Replicate-hosted URL
+        console.error('[BG] Upload error:', uploadError);
+        finalVideoUrl = muxedVideoUrl;
       } else {
         const { data: publicUrl } = supabase.storage.from('renders').getPublicUrl(fileName);
         finalVideoUrl = publicUrl.publicUrl;
-        console.log('Video uploaded to storage:', finalVideoUrl);
+        console.log('[BG] Video uploaded:', finalVideoUrl);
       }
     } catch (vidError) {
-      console.error('Video generation error:', vidError);
+      console.error('[BG] Video generation error:', vidError);
       finalVideoUrl = null;
     }
 
-    // Generate SEO metadata using AI
+    // Generate SEO metadata
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
-    let seoData = {
-      title: '',
-      description: '',
-      keywords: '',
-      hashtags: ''
-    };
+    let seoData = { title: '', description: '', keywords: '', hashtags: '' };
 
     if (lovableApiKey && scenes.length > 0) {
       try {
+        console.log('[BG] Generating SEO metadata...');
         const narrationText = scenes.map((s: any) => s.narration).join(' ');
         
         const seoResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -373,12 +315,13 @@ serve(async (req) => {
             }
           }
         }
+        console.log('[BG] SEO generated');
       } catch (seoError) {
-        console.error('SEO generation error:', seoError);
+        console.error('[BG] SEO generation error:', seoError);
       }
     }
 
-    // Generate subtitles in SRT and VTT format
+    // Generate subtitles
     let srtContent = '';
     let vttContent = 'WEBVTT\n\n';
     
@@ -386,25 +329,21 @@ serve(async (req) => {
       const startTime = scene.start_time || 0;
       const endTime = scene.end_time || startTime + 5;
       
-      // SRT format
       const srtStart = formatSrtTime(startTime);
       const srtEnd = formatSrtTime(endTime);
       srtContent += `${index + 1}\n${srtStart} --> ${srtEnd}\n${scene.narration}\n\n`;
       
-      // VTT format
       const vttStart = formatVttTime(startTime);
       const vttEnd = formatVttTime(endTime);
       vttContent += `${vttStart} --> ${vttEnd}\n${scene.narration}\n\n`;
     });
 
-    // Generate viral YouTube thumbnail using AI
+    // Generate viral thumbnail
     let generatedThumbnailUrl: string | null = thumbnailImageUrl || validImages[0] || null;
     
     if (lovableApiKey && generatedThumbnailUrl) {
       try {
-        console.log('Generating viral YouTube thumbnail...');
-        
-        // Use the selected thumbnail image or first scene image
+        console.log('[BG] Generating viral thumbnail...');
         const baseImageUrl = thumbnailImageUrl || validImages[0];
         const videoTitle = projectTitle || seoData.title || 'Video';
         const narrationSummary = scenes.map((s: any) => s.narration).join(' ').substring(0, 500);
@@ -442,9 +381,7 @@ Make it irresistible to click!`
                   },
                   {
                     type: 'image_url',
-                    image_url: {
-                      url: baseImageUrl
-                    }
+                    image_url: { url: baseImageUrl }
                   }
                 ]
               }
@@ -457,7 +394,6 @@ Make it irresistible to click!`
           const thumbnailBase64 = thumbnailResult.choices?.[0]?.message?.images?.[0]?.image_url?.url;
           
           if (thumbnailBase64) {
-            // Upload to storage
             const base64Data = thumbnailBase64.replace(/^data:image\/\w+;base64,/, '');
             const thumbnailBytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
             
@@ -472,13 +408,12 @@ Make it irresistible to click!`
             if (!thumbUploadError) {
               const { data: thumbPublicUrl } = supabase.storage.from('renders').getPublicUrl(thumbnailFileName);
               generatedThumbnailUrl = thumbPublicUrl.publicUrl;
-              console.log('Viral thumbnail generated:', generatedThumbnailUrl);
+              console.log('[BG] Viral thumbnail generated:', generatedThumbnailUrl);
             }
           }
         }
       } catch (thumbError) {
-        console.error('Thumbnail generation error:', thumbError);
-        // Fall back to original image
+        console.error('[BG] Thumbnail generation error:', thumbError);
       }
     }
 
@@ -497,13 +432,12 @@ Make it irresistible to click!`
         seo_hashtags: seoData.hashtags,
         subtitle_srt: srtContent,
         subtitle_vtt: vttContent,
-        // If muxing fails we still return a video, but flag it clearly.
         error_message: isSuccess ? (audioMuxWarning ?? null) : 'Failed to generate final mp4',
       })
       .eq('id', renderId);
 
     if (updateError) {
-      console.error('Update error:', updateError);
+      console.error('[BG] Update error:', updateError);
     }
 
     // Update project status
@@ -512,15 +446,84 @@ Make it irresistible to click!`
       .update({ status: isSuccess ? 'completed' : 'ready' })
       .eq('id', projectId);
 
-    console.log('Render completed:', { renderId, videoUrl: finalVideoUrl });
+    console.log(`[BG] Render ${renderId} completed: ${isSuccess ? 'SUCCESS' : 'FAILED'}`);
 
+  } catch (error) {
+    console.error(`[BG] Render ${renderId} failed:`, error);
+    
+    // Update render as failed
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    
+    await supabase
+      .from('renders')
+      .update({
+        status: 'failed',
+        error_message: error instanceof Error ? error.message : 'Unknown error',
+      })
+      .eq('id', renderId);
+
+    await supabase
+      .from('projects')
+      .update({ status: 'ready' })
+      .eq('id', projectId);
+  }
+}
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const { projectId, scenes, audioUrl, audioDuration, thumbnailImageUrl, projectTitle } = await req.json();
+    
+    if (!projectId || !scenes || scenes.length === 0) {
+      throw new Error('Missing projectId or scenes');
+    }
+
+    const REPLICATE_API_KEY = Deno.env.get('REPLICATE_API_KEY');
+    if (!REPLICATE_API_KEY) {
+      throw new Error('REPLICATE_API_KEY is not configured');
+    }
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    console.log(`Starting render for project ${projectId} with ${scenes.length} scenes`);
+
+    // Create a render record with "rendering" status
+    const { data: renderRecord, error: renderError } = await supabase
+      .from('renders')
+      .insert({
+        project_id: projectId,
+        status: 'rendering',
+        duration: audioDuration,
+      })
+      .select()
+      .single();
+
+    if (renderError) {
+      throw new Error(`Failed to create render record: ${renderError.message}`);
+    }
+
+    const renderId = renderRecord.id;
+    console.log(`Created render record: ${renderId} - starting background processing`);
+
+    // Start background processing - this allows the request to return immediately
+    // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
+    (globalThis as any).EdgeRuntime?.waitUntil?.(
+      processRender(projectId, scenes, audioUrl, audioDuration, thumbnailImageUrl, projectTitle, renderId)
+    );
+
+    // Return immediately with the render ID
     return new Response(JSON.stringify({
       success: true,
       renderId,
-      videoUrl: finalVideoUrl,
-      thumbnailUrl: generatedThumbnailUrl,
-      seo: seoData,
-      imageCount: validImages.length
+      message: 'Render started in background. Check the Finished tab for progress.',
+      status: 'rendering'
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
