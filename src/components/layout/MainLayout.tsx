@@ -1,6 +1,9 @@
 import { ReactNode } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Film, FolderOpen, Video } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Film, FolderOpen, Video, LogOut } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
+import { toast } from "sonner";
 
 interface MainLayoutProps {
   activeTab: string;
@@ -9,14 +12,32 @@ interface MainLayoutProps {
 }
 
 export function MainLayout({ activeTab, onTabChange, children }: MainLayoutProps) {
+  const { user, signOut } = useAuth();
+
+  const handleSignOut = async () => {
+    await signOut();
+    toast.success("Signed out successfully");
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Header */}
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center gap-3">
-            <Film className="h-8 w-8 text-primary" />
-            <h1 className="text-2xl font-bold">YouTube Video Engine</h1>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Film className="h-8 w-8 text-primary" />
+              <h1 className="text-2xl font-bold">YouTube Video Engine</h1>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="text-sm text-muted-foreground hidden sm:inline">
+                {user?.email}
+              </span>
+              <Button variant="ghost" size="sm" onClick={handleSignOut}>
+                <LogOut className="h-4 w-4 mr-2" />
+                Sign out
+              </Button>
+            </div>
           </div>
         </div>
       </header>

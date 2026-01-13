@@ -6,6 +6,7 @@ export type RenderStatus = 'queued' | 'rendering' | 'completed' | 'failed';
 export interface Project {
   id: string;
   title: string;
+  user_id: string | null;
   audio_url: string | null;
   audio_duration: number | null;
   transcript: string | null;

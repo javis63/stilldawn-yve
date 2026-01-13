@@ -24,6 +24,7 @@ export type Database = {
           title: string
           transcript: string | null
           updated_at: string
+          user_id: string | null
         }
         Insert: {
           audio_duration?: number | null
@@ -34,6 +35,7 @@ export type Database = {
           title: string
           transcript?: string | null
           updated_at?: string
+          user_id?: string | null
         }
         Update: {
           audio_duration?: number | null
@@ -44,6 +46,7 @@ export type Database = {
           title?: string
           transcript?: string | null
           updated_at?: string
+          user_id?: string | null
         }
         Relationships: []
       }

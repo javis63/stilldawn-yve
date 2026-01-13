@@ -6,18 +6,18 @@ import { Progress } from "@/components/ui/progress";
 import { Upload, Music, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-
+import { useAuth } from "@/hooks/useAuth";
 interface CreateProjectProps {
   onProjectCreated: (projectId: string) => void;
 }
 
 export function CreateProject({ onProjectCreated }: CreateProjectProps) {
+  const { user } = useAuth();
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragActive, setDragActive] = useState(false);
-
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -70,13 +70,12 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
     setUploadProgress(0);
 
     try {
-      // Create project first
+      // Create project first (include user_id for RLS)
       const { data: project, error: projectError } = await supabase
         .from("projects")
-        .insert({ title: title.trim(), status: "draft" })
+        .insert({ title: title.trim(), status: "draft", user_id: user?.id })
         .select()
         .single();
-
       if (projectError) throw projectError;
 
       setUploadProgress(20);
