@@ -101,7 +101,7 @@ export default function Auth() {
       <Card className="w-full max-w-md bg-card border-border">
         <CardHeader className="text-center space-y-2">
           <div className="flex justify-center mb-2">
-            <img src={logoSvg} alt="StillDawn" className="h-16 w-16" />
+            <img src={logoSvg} alt="STILL DAWN STUDIOS" className="h-16 w-16" />
           </div>
           <CardTitle className="text-2xl">Welcome back</CardTitle>
           <CardDescription className="text-muted-foreground">
