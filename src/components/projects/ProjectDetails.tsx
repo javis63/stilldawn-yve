@@ -21,6 +21,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { formatDistanceToNow } from "date-fns";
 import { SceneCard } from "./SceneCard";
 import { toast } from "sonner";
+import { Progress } from "@/components/ui/progress";
 
 interface ProjectDetailsProps {
   project: Project;
@@ -33,6 +34,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   const [expandedScenes, setExpandedScenes] = useState<Set<string>>(new Set());
   const [processing, setProcessing] = useState<string | null>(null);
   const [currentProject, setCurrentProject] = useState<Project>(project);
+  const [renderProgress, setRenderProgress] = useState(0);
 
   // Keep local project state in sync with prop
   useEffect(() => {
@@ -154,12 +156,21 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
 
   const handleRenderProject = async () => {
     setProcessing("render");
+    setRenderProgress(0);
     toast.info("Starting render...");
-    // TODO: Implement FFmpeg rendering
-    setTimeout(() => {
-      setProcessing(null);
-      toast.success("Render started!");
-    }, 2000);
+    
+    // Simulate render progress (TODO: Replace with real FFmpeg rendering)
+    const interval = setInterval(() => {
+      setRenderProgress((prev) => {
+        if (prev >= 100) {
+          clearInterval(interval);
+          setProcessing(null);
+          toast.success("Render complete!");
+          return 100;
+        }
+        return prev + Math.random() * 15;
+      });
+    }, 500);
   };
 
   const getStatusBadge = (status: string) => {
@@ -208,18 +219,26 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           )}
           Generate Scenes
         </Button>
-        <Button
-          onClick={handleRenderProject}
-          disabled={!!processing || scenes.length === 0}
-          variant="outline"
-        >
-          {processing === "render" ? (
-            <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <Play className="h-4 w-4 mr-2" />
+        <div className="flex items-center gap-3">
+          <Button
+            onClick={handleRenderProject}
+            disabled={!!processing || scenes.length === 0}
+            variant="outline"
+          >
+            {processing === "render" ? (
+              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Play className="h-4 w-4 mr-2" />
+            )}
+            Render Project
+          </Button>
+          {processing === "render" && (
+            <div className="flex items-center gap-2 min-w-[150px]">
+              <Progress value={Math.min(renderProgress, 100)} className="h-2" />
+              <span className="text-sm text-muted-foreground">{Math.round(Math.min(renderProgress, 100))}%</span>
+            </div>
           )}
-          Render Project
-        </Button>
+        </div>
         <Separator orientation="vertical" className="h-9" />
         <Button variant="ghost" size="icon">
           <Download className="h-4 w-4" />

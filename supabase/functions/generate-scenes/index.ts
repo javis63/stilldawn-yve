@@ -27,9 +27,10 @@ serve(async (req) => {
     console.log(`Transcript length: ${transcript.length} characters`);
     console.log(`Audio duration: ${audioDuration}s`);
 
-    // Calculate target number of scenes (roughly 1 scene per 10-15 seconds, max 50)
-    const targetScenes = Math.min(50, Math.max(5, Math.ceil((audioDuration || 60) / 12)));
-    console.log(`Target scenes: ${targetScenes}`);
+    // Calculate target number of scenes (2-4 minutes per scene = 120-240 seconds)
+    // Target ~3 minutes (180s) per scene on average
+    const targetScenes = Math.max(1, Math.ceil((audioDuration || 60) / 180));
+    console.log(`Target scenes: ${targetScenes} (aiming for 2-4 min each)`);
 
     const systemPrompt = `You are a video scene breakdown expert. Your job is to break down narration transcripts into visual scenes for video production.
 
@@ -66,8 +67,9 @@ ${transcript}
 
 Remember:
 - Scenes should flow naturally with the narration
-- Each scene should be 8-15 seconds typically
+- Each scene should be 2-4 MINUTES long (120-240 seconds) - this is CRITICAL
 - Visual prompts should be vivid and specific
+- Combine related content into longer cohesive scenes
 - Return ONLY the JSON, no other text`;
 
     console.log('Calling Lovable AI...');
