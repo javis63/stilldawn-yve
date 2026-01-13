@@ -32,6 +32,12 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   const [loading, setLoading] = useState(true);
   const [expandedScenes, setExpandedScenes] = useState<Set<string>>(new Set());
   const [processing, setProcessing] = useState<string | null>(null);
+  const [currentProject, setCurrentProject] = useState<Project>(project);
+
+  // Keep local project state in sync with prop
+  useEffect(() => {
+    setCurrentProject(project);
+  }, [project]);
 
   const fetchScenes = async () => {
     try {
@@ -75,13 +81,41 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   };
 
   const handleGenerateTimestamps = async () => {
+    if (!currentProject.audio_url) {
+      toast.error("No audio file uploaded");
+      return;
+    }
+
     setProcessing("timestamps");
-    toast.info("Generating timestamps with Whisper...");
-    // TODO: Implement Whisper transcription
-    setTimeout(() => {
+    toast.info("Generating timestamps with Whisper... This may take a minute.");
+
+    try {
+      const { data, error } = await supabase.functions.invoke('transcribe', {
+        body: {
+          projectId: currentProject.id,
+          audioUrl: currentProject.audio_url,
+        },
+      });
+
+      if (error) throw error;
+      if (!data.success) throw new Error(data.error || 'Transcription failed');
+
+      // Update local project state
+      setCurrentProject(prev => ({
+        ...prev,
+        transcript: data.transcript,
+        audio_duration: data.duration,
+        status: 'processing' as const,
+      }));
+
+      toast.success(`Transcription complete! Duration: ${Math.round(data.duration)}s`);
+      onRefresh();
+    } catch (error: any) {
+      console.error("Transcription error:", error);
+      toast.error(error.message || "Failed to transcribe audio");
+    } finally {
       setProcessing(null);
-      toast.success("Timestamps generated!");
-    }, 2000);
+    }
   };
 
   const handleGenerateScenes = async () => {
@@ -128,7 +162,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
       <div className="flex flex-wrap gap-3">
         <Button
           onClick={handleGenerateTimestamps}
-          disabled={!!processing || !project.audio_url}
+          disabled={!!processing || !currentProject.audio_url}
           className="bg-primary hover:bg-primary/90"
         >
           {processing === "timestamps" ? (
@@ -136,11 +170,11 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           ) : (
             <Wand2 className="h-4 w-4 mr-2" />
           )}
-          Generate Timestamps
+          {currentProject.transcript ? "Re-generate Timestamps" : "Generate Timestamps"}
         </Button>
         <Button
           onClick={handleGenerateScenes}
-          disabled={!!processing || !project.transcript}
+          disabled={!!processing || !currentProject.transcript}
           variant="outline"
         >
           {processing === "scenes" ? (
@@ -177,9 +211,9 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg flex items-center gap-2">
               <Film className="h-5 w-5 text-primary" />
-              {project.title}
+              {currentProject.title}
             </CardTitle>
-            {getStatusBadge(project.status)}
+            {getStatusBadge(currentProject.status)}
           </div>
         </CardHeader>
         <CardContent>
