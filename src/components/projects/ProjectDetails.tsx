@@ -1,12 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Slider } from "@/components/ui/slider";
 import {
   Wand2,
   Layers,
   Play,
+  Pause,
   Download,
   Upload,
   RefreshCw,
@@ -15,6 +17,8 @@ import {
   Image,
   CheckCircle,
   AlertCircle,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { Project, Scene } from "@/types/project";
 import { supabase } from "@/integrations/supabase/client";
@@ -36,6 +40,14 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   const [currentProject, setCurrentProject] = useState<Project>(project);
   const [renderProgress, setRenderProgress] = useState(0);
   const [thumbnailSceneId, setThumbnailSceneId] = useState<string | null>(null);
+  
+  // Audio player state
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [audioProgress, setAudioProgress] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
 
   // Keep local project state in sync with prop
   useEffect(() => {
@@ -97,6 +109,64 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
 
   const collapseAll = () => {
     setExpandedScenes(new Set());
+  };
+
+  // Audio player functions
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const togglePlayPause = () => {
+    if (!audioRef.current) return;
+    
+    if (isPlaying) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play();
+    }
+    setIsPlaying(!isPlaying);
+  };
+
+  const handleTimeUpdate = () => {
+    if (!audioRef.current) return;
+    setAudioProgress(audioRef.current.currentTime);
+  };
+
+  const handleLoadedMetadata = () => {
+    if (!audioRef.current) return;
+    setAudioDuration(audioRef.current.duration);
+  };
+
+  const handleSeek = (value: number[]) => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = value[0];
+    setAudioProgress(value[0]);
+  };
+
+  const handleVolumeChange = (value: number[]) => {
+    if (!audioRef.current) return;
+    const newVolume = value[0];
+    audioRef.current.volume = newVolume;
+    setVolume(newVolume);
+    setIsMuted(newVolume === 0);
+  };
+
+  const toggleMute = () => {
+    if (!audioRef.current) return;
+    if (isMuted) {
+      audioRef.current.volume = volume || 1;
+      setIsMuted(false);
+    } else {
+      audioRef.current.volume = 0;
+      setIsMuted(true);
+    }
+  };
+
+  const handleAudioEnded = () => {
+    setIsPlaying(false);
+    setAudioProgress(0);
   };
 
   const handleSetThumbnail = async (sceneId: string | null) => {
@@ -360,7 +430,72 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
         </CardContent>
       </Card>
 
-      {/* API Status */}
+      {/* Audio Player */}
+      {currentProject.audio_url && (
+        <Card className="bg-card border-border">
+          <CardContent className="py-4">
+            <audio
+              ref={audioRef}
+              src={currentProject.audio_url}
+              onTimeUpdate={handleTimeUpdate}
+              onLoadedMetadata={handleLoadedMetadata}
+              onEnded={handleAudioEnded}
+              className="hidden"
+            />
+            <div className="flex items-center gap-4">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={togglePlayPause}
+                className="h-10 w-10 shrink-0"
+              >
+                {isPlaying ? (
+                  <Pause className="h-4 w-4" />
+                ) : (
+                  <Play className="h-4 w-4 ml-0.5" />
+                )}
+              </Button>
+              
+              <div className="flex-1 space-y-1">
+                <Slider
+                  value={[audioProgress]}
+                  max={audioDuration || 100}
+                  step={0.1}
+                  onValueChange={handleSeek}
+                  className="cursor-pointer"
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{formatTime(audioProgress)}</span>
+                  <span>{formatTime(audioDuration)}</span>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={toggleMute}
+                  className="h-8 w-8"
+                >
+                  {isMuted ? (
+                    <VolumeX className="h-4 w-4" />
+                  ) : (
+                    <Volume2 className="h-4 w-4" />
+                  )}
+                </Button>
+                <Slider
+                  value={[isMuted ? 0 : volume]}
+                  max={1}
+                  step={0.01}
+                  onValueChange={handleVolumeChange}
+                  className="w-20 cursor-pointer"
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="flex items-center gap-4 text-sm">
         <div className="flex items-center gap-2">
           <CheckCircle className="h-4 w-4 text-green-400" />
