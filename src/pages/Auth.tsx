@@ -7,8 +7,9 @@ import { Separator } from "@/components/ui/separator";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Loader2, Mail, Lock, Video } from "lucide-react";
+import { Loader2, Mail, Lock } from "lucide-react";
 import { z } from "zod";
+import logoSvg from "@/assets/logo.svg";
 
 const emailSchema = z.string().email("Please enter a valid email address");
 const passwordSchema = z.string().min(6, "Password must be at least 6 characters");
@@ -121,9 +122,7 @@ export default function Auth() {
       <Card className="w-full max-w-md bg-card border-border">
         <CardHeader className="text-center space-y-2">
           <div className="flex justify-center mb-2">
-            <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center">
-              <Video className="h-6 w-6 text-primary" />
-            </div>
+            <img src={logoSvg} alt="StillDawn" className="h-16 w-16" />
           </div>
           <CardTitle className="text-2xl">
             {isSignUp ? "Create an account" : "Welcome back"}
