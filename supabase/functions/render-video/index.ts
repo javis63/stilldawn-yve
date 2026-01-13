@@ -13,7 +13,7 @@ serve(async (req) => {
   }
 
   try {
-    const { projectId, scenes, audioUrl, audioDuration } = await req.json();
+    const { projectId, scenes, audioUrl, audioDuration, thumbnailImageUrl, projectTitle } = await req.json();
     
     if (!projectId || !scenes || scenes.length === 0) {
       throw new Error('Missing projectId or scenes');
@@ -397,6 +397,91 @@ serve(async (req) => {
       vttContent += `${vttStart} --> ${vttEnd}\n${scene.narration}\n\n`;
     });
 
+    // Generate viral YouTube thumbnail using AI
+    let generatedThumbnailUrl: string | null = thumbnailImageUrl || validImages[0] || null;
+    
+    if (lovableApiKey && generatedThumbnailUrl) {
+      try {
+        console.log('Generating viral YouTube thumbnail...');
+        
+        // Use the selected thumbnail image or first scene image
+        const baseImageUrl = thumbnailImageUrl || validImages[0];
+        const videoTitle = projectTitle || seoData.title || 'Video';
+        const narrationSummary = scenes.map((s: any) => s.narration).join(' ').substring(0, 500);
+        
+        const thumbnailResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${lovableApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'google/gemini-2.5-flash-image-preview',
+            modalities: ['image', 'text'],
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: `Transform this image into a viral YouTube thumbnail that makes people NEED to click. 
+                    
+Video title: "${videoTitle}"
+Content summary: "${narrationSummary}"
+
+Requirements:
+- Make it eye-catching with bold, dramatic colors and high contrast
+- Add visual drama: enhance lighting, add subtle glow effects or color grading
+- Keep the main subject prominent and clear
+- Make it look professional and high-quality like top YouTubers use
+- Use a 16:9 aspect ratio optimized for YouTube thumbnails
+- Do NOT add any text or overlays - keep it purely visual enhancement
+- Create strong visual hooks that trigger curiosity
+
+Make it irresistible to click!`
+                  },
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: baseImageUrl
+                    }
+                  }
+                ]
+              }
+            ],
+          }),
+        });
+
+        if (thumbnailResponse.ok) {
+          const thumbnailResult = await thumbnailResponse.json();
+          const thumbnailBase64 = thumbnailResult.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+          
+          if (thumbnailBase64) {
+            // Upload to storage
+            const base64Data = thumbnailBase64.replace(/^data:image\/\w+;base64,/, '');
+            const thumbnailBytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+            
+            const thumbnailFileName = `${projectId}/${renderId}_thumbnail.png`;
+            const { error: thumbUploadError } = await supabase.storage
+              .from('renders')
+              .upload(thumbnailFileName, thumbnailBytes, {
+                contentType: 'image/png',
+                upsert: true,
+              });
+
+            if (!thumbUploadError) {
+              const { data: thumbPublicUrl } = supabase.storage.from('renders').getPublicUrl(thumbnailFileName);
+              generatedThumbnailUrl = thumbPublicUrl.publicUrl;
+              console.log('Viral thumbnail generated:', generatedThumbnailUrl);
+            }
+          }
+        }
+      } catch (thumbError) {
+        console.error('Thumbnail generation error:', thumbError);
+        // Fall back to original image
+      }
+    }
+
     // Update render record with results
     const isSuccess = !!finalVideoUrl;
 
@@ -405,7 +490,7 @@ serve(async (req) => {
       .update({
         status: isSuccess ? 'completed' : 'failed',
         video_url: finalVideoUrl,
-        thumbnail_url: validImages[0],
+        thumbnail_url: generatedThumbnailUrl,
         seo_title: seoData.title,
         seo_description: seoData.description,
         seo_keywords: seoData.keywords,
@@ -433,7 +518,7 @@ serve(async (req) => {
       success: true,
       renderId,
       videoUrl: finalVideoUrl,
-      thumbnailUrl: validImages[0],
+      thumbnailUrl: generatedThumbnailUrl,
       seo: seoData,
       imageCount: validImages.length
     }), {
