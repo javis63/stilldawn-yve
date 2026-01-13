@@ -14,5 +14,8 @@ export default defineConfig(({ mode }) => ({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+    // Prevent "two copies of React" which can surface as
+    // "Cannot read properties of null (reading 'useEffect')".
+    dedupe: ["react", "react-dom"],
   },
 }));
