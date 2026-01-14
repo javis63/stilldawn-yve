@@ -2,6 +2,7 @@ export type ProjectStatus = 'draft' | 'processing' | 'ready' | 'rendering' | 'co
 export type SceneType = 'image' | 'video';
 export type TransitionType = 'crossfade' | 'hard_cut' | 'zoom_in' | 'zoom_out' | 'fade_to_black' | 'slide_left' | 'slide_right';
 export type RenderStatus = 'queued' | 'rendering' | 'completed' | 'failed';
+export type ProjectType = 'narration' | 'music';
 
 export interface Project {
   id: string;
@@ -12,6 +13,7 @@ export interface Project {
   transcript: string | null;
   status: ProjectStatus;
   progress: number | null;
+  project_type: ProjectType;
   created_at: string;
   updated_at: string;
 }

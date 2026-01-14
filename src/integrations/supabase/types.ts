@@ -21,6 +21,7 @@ export type Database = {
           created_at: string
           id: string
           progress: number | null
+          project_type: Database["public"]["Enums"]["project_type"]
           status: Database["public"]["Enums"]["project_status"]
           thumbnail_scene_id: string | null
           title: string
@@ -35,6 +36,7 @@ export type Database = {
           created_at?: string
           id?: string
           progress?: number | null
+          project_type?: Database["public"]["Enums"]["project_type"]
           status?: Database["public"]["Enums"]["project_status"]
           thumbnail_scene_id?: string | null
           title: string
@@ -49,6 +51,7 @@ export type Database = {
           created_at?: string
           id?: string
           progress?: number | null
+          project_type?: Database["public"]["Enums"]["project_type"]
           status?: Database["public"]["Enums"]["project_status"]
           thumbnail_scene_id?: string | null
           title?: string
@@ -200,6 +203,7 @@ export type Database = {
         | "rendering"
         | "completed"
         | "error"
+      project_type: "narration" | "music"
       render_status: "queued" | "rendering" | "completed" | "failed"
       scene_type: "image" | "video"
       transition_type:
@@ -345,6 +349,7 @@ export const Constants = {
         "completed",
         "error",
       ],
+      project_type: ["narration", "music"],
       render_status: ["queued", "rendering", "completed", "failed"],
       scene_type: ["image", "video"],
       transition_type: [

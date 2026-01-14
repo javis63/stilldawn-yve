@@ -258,14 +258,16 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   };
 
   const handleRenderProject = async () => {
+    const isMusicVideoProject = (currentProject as any).project_type === 'music';
+    
     if (scenes.length === 0) {
-      toast.error("No scenes to render. Generate scenes first.");
+      toast.error(isMusicVideoProject ? "No scenes to render. Add images to your scenes first." : "No scenes to render. Generate scenes first.");
       return;
     }
 
     setProcessing("render");
     setRenderProgress(5);
-    toast.info("Starting video render with AI... This may take several minutes.");
+    toast.info(isMusicVideoProject ? "Starting music video render..." : "Starting video render with AI... This may take several minutes.");
 
     // Progress simulation while waiting for actual render
     const progressInterval = setInterval(() => {
@@ -282,6 +284,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
       const { data, error } = await supabase.functions.invoke('render-video', {
         body: {
           projectId: currentProject.id,
+          projectType: (currentProject as any).project_type || 'narration',
           scenes: scenes.map(s => ({
             id: s.id,
             scene_number: s.scene_number,
@@ -340,46 +343,53 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
 
   const imageCount = scenes.filter((s) => s.image_url).length;
 
+  const isMusicVideo = (currentProject as any).project_type === 'music';
+
   return (
     <div className="space-y-6">
       {/* Action Buttons */}
       <div className="flex flex-wrap gap-3">
-        <Button
-          onClick={handleGenerateTimestamps}
-          disabled={!!processing || !currentProject.audio_url}
-          className="bg-primary hover:bg-primary/90"
-        >
-          {processing === "timestamps" ? (
-            <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <Wand2 className="h-4 w-4 mr-2" />
-          )}
-          {currentProject.transcript ? "Re-generate Timestamps" : "Generate Timestamps"}
-        </Button>
-        <Button
-          onClick={handleGenerateScenes}
-          disabled={!!processing || !currentProject.transcript}
-          variant="outline"
-        >
-          {processing === "scenes" ? (
-            <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <Layers className="h-4 w-4 mr-2" />
-          )}
-          Generate Scenes
-        </Button>
+        {!isMusicVideo && (
+          <>
+            <Button
+              onClick={handleGenerateTimestamps}
+              disabled={!!processing || !currentProject.audio_url}
+              className="bg-primary hover:bg-primary/90"
+            >
+              {processing === "timestamps" ? (
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Wand2 className="h-4 w-4 mr-2" />
+              )}
+              {currentProject.transcript ? "Re-generate Timestamps" : "Generate Timestamps"}
+            </Button>
+            <Button
+              onClick={handleGenerateScenes}
+              disabled={!!processing || !currentProject.transcript}
+              variant="outline"
+            >
+              {processing === "scenes" ? (
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Layers className="h-4 w-4 mr-2" />
+              )}
+              Generate Scenes
+            </Button>
+          </>
+        )}
         <div className="flex items-center gap-3">
           <Button
             onClick={handleRenderProject}
             disabled={!!processing || scenes.length === 0}
-            variant="outline"
+            variant={isMusicVideo ? "default" : "outline"}
+            className={isMusicVideo ? "bg-primary hover:bg-primary/90" : ""}
           >
             {processing === "render" ? (
               <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
             ) : (
               <Play className="h-4 w-4 mr-2" />
             )}
-            Render Project
+            Render {isMusicVideo ? "Music Video" : "Project"}
           </Button>
           {processing === "render" && (
             <div className="flex items-center gap-2 min-w-[150px]">
@@ -404,6 +414,9 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
             <CardTitle className="text-lg flex items-center gap-2">
               <Film className="h-5 w-5 text-primary" />
               {currentProject.title}
+              {isMusicVideo && (
+                <Badge variant="secondary" className="ml-2">Music Video</Badge>
+              )}
             </CardTitle>
             {getStatusBadge(currentProject.status)}
           </div>
