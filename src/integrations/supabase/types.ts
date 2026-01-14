@@ -20,6 +20,7 @@ export type Database = {
           audio_url: string | null
           created_at: string
           id: string
+          progress: number | null
           status: Database["public"]["Enums"]["project_status"]
           thumbnail_scene_id: string | null
           title: string
@@ -33,6 +34,7 @@ export type Database = {
           audio_url?: string | null
           created_at?: string
           id?: string
+          progress?: number | null
           status?: Database["public"]["Enums"]["project_status"]
           thumbnail_scene_id?: string | null
           title: string
@@ -46,6 +48,7 @@ export type Database = {
           audio_url?: string | null
           created_at?: string
           id?: string
+          progress?: number | null
           status?: Database["public"]["Enums"]["project_status"]
           thumbnail_scene_id?: string | null
           title?: string

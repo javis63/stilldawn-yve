@@ -2,6 +2,11 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// Declare EdgeRuntime for Supabase background tasks
+declare const EdgeRuntime: {
+  waitUntil: (promise: Promise<unknown>) => void;
+};
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -54,9 +59,9 @@ async function generateTTSChunk(text: string, apiKey: string, voice: string): Pr
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-      body: JSON.stringify({
-        model: 'tts-1-hd',
-        input: text,
+    body: JSON.stringify({
+      model: 'tts-1-hd',
+      input: text,
       voice: voice,
       response_format: 'mp3',
     }),
@@ -68,6 +73,154 @@ async function generateTTSChunk(text: string, apiKey: string, voice: string): Pr
   }
 
   return await response.arrayBuffer();
+}
+
+// Background task for long-running TTS generation
+async function processLongTTS(
+  projectId: string,
+  script: string,
+  voice: string,
+  openaiApiKey: string,
+  supabase: any
+) {
+  try {
+    console.log(`[Background] Starting TTS for project ${projectId}`);
+    
+    // Chunk the script for processing
+    const chunks = chunkText(script, MAX_CHUNK_SIZE);
+    console.log(`[Background] Split script into ${chunks.length} chunks`);
+
+    // Generate audio for each chunk with progress updates
+    const audioBuffers: ArrayBuffer[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      console.log(`[Background] Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`);
+      
+      const buffer = await generateTTSChunk(chunks[i], openaiApiKey, voice);
+      audioBuffers.push(buffer);
+      
+      // Update progress (TTS is 70% of total work, whisper is 30%)
+      const ttsProgress = Math.round(((i + 1) / chunks.length) * 70);
+      await supabase
+        .from('projects')
+        .update({ progress: ttsProgress })
+        .eq('id', projectId);
+      
+      console.log(`[Background] Progress: ${ttsProgress}%`);
+    }
+
+    // Combine all audio chunks into a single buffer
+    const totalLength = audioBuffers.reduce((acc, buf) => acc + buf.byteLength, 0);
+    const combinedBuffer = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const buffer of audioBuffers) {
+      combinedBuffer.set(new Uint8Array(buffer), offset);
+      offset += buffer.byteLength;
+    }
+
+    console.log(`[Background] Total audio size: ${combinedBuffer.byteLength} bytes`);
+
+    // Upload to Supabase storage
+    const filePath = `${projectId}/audio.mp3`;
+    const { error: uploadError } = await supabase.storage
+      .from('audio')
+      .upload(filePath, combinedBuffer, {
+        contentType: 'audio/mpeg',
+        upsert: true,
+      });
+
+    if (uploadError) {
+      throw new Error(`Failed to upload audio: ${uploadError.message}`);
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from('audio')
+      .getPublicUrl(filePath);
+
+    const audioUrl = urlData.publicUrl;
+    console.log(`[Background] Audio uploaded: ${audioUrl}`);
+
+    // Update project with audio URL and script as transcript
+    await supabase
+      .from('projects')
+      .update({
+        audio_url: audioUrl,
+        transcript: script,
+        progress: 75,
+      })
+      .eq('id', projectId);
+
+    console.log('[Background] TTS generation complete, now transcribing for timestamps...');
+
+    // Now call Whisper to get word-level timestamps
+    const audioResponse = await fetch(audioUrl);
+    if (!audioResponse.ok) {
+      throw new Error(`Failed to download generated audio: ${audioResponse.statusText}`);
+    }
+
+    const audioBlob = await audioResponse.blob();
+    console.log(`[Background] Downloaded audio for transcription: ${audioBlob.size} bytes`);
+
+    await supabase
+      .from('projects')
+      .update({ progress: 80 })
+      .eq('id', projectId);
+
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'audio.mp3');
+    formData.append('model', 'whisper-1');
+    formData.append('response_format', 'verbose_json');
+    formData.append('timestamp_granularities[]', 'word');
+    formData.append('timestamp_granularities[]', 'segment');
+
+    const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openaiApiKey}`,
+      },
+      body: formData,
+    });
+
+    if (!whisperResponse.ok) {
+      const errorText = await whisperResponse.text();
+      console.error('[Background] Whisper API error:', errorText);
+      throw new Error(`Whisper API error: ${whisperResponse.status} - ${errorText}`);
+    }
+
+    await supabase
+      .from('projects')
+      .update({ progress: 95 })
+      .eq('id', projectId);
+
+    const transcription = await whisperResponse.json();
+    console.log('[Background] Transcription complete, duration:', transcription.duration);
+    console.log('[Background] Word timestamps count:', transcription.words?.length || 0);
+
+    // Update project with duration, word timestamps, and mark as ready
+    await supabase
+      .from('projects')
+      .update({
+        audio_duration: transcription.duration,
+        word_timestamps: transcription.words || [],
+        status: 'ready',
+        progress: 100,
+      })
+      .eq('id', projectId);
+
+    console.log(`[Background] Project ${projectId} completed successfully!`);
+
+  } catch (error) {
+    console.error('[Background] TTS generation error:', error);
+    
+    // Update project status to error
+    await supabase
+      .from('projects')
+      .update({
+        status: 'error',
+        progress: 0,
+      })
+      .eq('id', projectId);
+  }
 }
 
 serve(async (req) => {
@@ -99,122 +252,28 @@ serve(async (req) => {
     console.log(`Script length: ${script.length} characters`);
     console.log(`Using voice: ${voice}`);
 
-    // Update project status
+    // Update project status and reset progress
     await supabase
       .from('projects')
-      .update({ status: 'processing' })
+      .update({ status: 'processing', progress: 0 })
       .eq('id', projectId);
 
-    // Chunk the script for processing
-    const chunks = chunkText(script, MAX_CHUNK_SIZE);
-    console.log(`Split script into ${chunks.length} chunks`);
+    // Calculate estimated chunks for logging
+    const estimatedChunks = Math.ceil(script.length / MAX_CHUNK_SIZE);
+    console.log(`Estimated ${estimatedChunks} chunks to process`);
 
-    // Generate audio for each chunk
-    const audioBuffers: ArrayBuffer[] = [];
-    for (let i = 0; i < chunks.length; i++) {
-      console.log(`Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`);
-      const buffer = await generateTTSChunk(chunks[i], openaiApiKey, voice);
-      audioBuffers.push(buffer);
-    }
+    // Use EdgeRuntime.waitUntil for background processing
+    // This allows the function to return immediately while processing continues
+    EdgeRuntime.waitUntil(
+      processLongTTS(projectId, script.trim(), voice, openaiApiKey, supabase)
+    );
 
-    // Combine all audio chunks into a single buffer
-    const totalLength = audioBuffers.reduce((acc, buf) => acc + buf.byteLength, 0);
-    const combinedBuffer = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const buffer of audioBuffers) {
-      combinedBuffer.set(new Uint8Array(buffer), offset);
-      offset += buffer.byteLength;
-    }
-
-    console.log(`Total audio size: ${combinedBuffer.byteLength} bytes`);
-
-    // Upload to Supabase storage
-    const filePath = `${projectId}/audio.mp3`;
-    const { error: uploadError } = await supabase.storage
-      .from('audio')
-      .upload(filePath, combinedBuffer, {
-        contentType: 'audio/mpeg',
-        upsert: true,
-      });
-
-    if (uploadError) {
-      throw new Error(`Failed to upload audio: ${uploadError.message}`);
-    }
-
-    // Get public URL
-    const { data: urlData } = supabase.storage
-      .from('audio')
-      .getPublicUrl(filePath);
-
-    const audioUrl = urlData.publicUrl;
-    console.log(`Audio uploaded: ${audioUrl}`);
-
-    // Update project with audio URL and script as transcript
-    const { error: updateError } = await supabase
-      .from('projects')
-      .update({
-        audio_url: audioUrl,
-        transcript: script,
-      })
-      .eq('id', projectId);
-
-    if (updateError) {
-      throw new Error(`Failed to update project: ${updateError.message}`);
-    }
-
-    console.log('TTS generation complete, now transcribing for timestamps...');
-
-    // Now call Whisper to get word-level timestamps
-    const audioResponse = await fetch(audioUrl);
-    if (!audioResponse.ok) {
-      throw new Error(`Failed to download generated audio: ${audioResponse.statusText}`);
-    }
-
-    const audioBlob = await audioResponse.blob();
-    console.log(`Downloaded audio for transcription: ${audioBlob.size} bytes`);
-
-    const formData = new FormData();
-    formData.append('file', audioBlob, 'audio.mp3');
-    formData.append('model', 'whisper-1');
-    formData.append('response_format', 'verbose_json');
-    formData.append('timestamp_granularities[]', 'word');
-    formData.append('timestamp_granularities[]', 'segment');
-
-    const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${openaiApiKey}`,
-      },
-      body: formData,
-    });
-
-    if (!whisperResponse.ok) {
-      const errorText = await whisperResponse.text();
-      console.error('Whisper API error:', errorText);
-      throw new Error(`Whisper API error: ${whisperResponse.status} - ${errorText}`);
-    }
-
-    const transcription = await whisperResponse.json();
-    console.log('Transcription complete, duration:', transcription.duration);
-    console.log('Word timestamps count:', transcription.words?.length || 0);
-
-    // Update project with duration and word timestamps for subtitle sync
-    await supabase
-      .from('projects')
-      .update({
-        audio_duration: transcription.duration,
-        word_timestamps: transcription.words || [],
-        status: 'processing',
-      })
-      .eq('id', projectId);
-
+    // Return immediately with success - processing continues in background
     return new Response(JSON.stringify({
       success: true,
-      audioUrl: audioUrl,
-      duration: transcription.duration,
-      segments: transcription.segments,
-      words: transcription.words,
-      transcript: transcription.text,
+      message: 'TTS generation started in background',
+      estimatedChunks,
+      projectId,
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

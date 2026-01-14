@@ -11,6 +11,7 @@ export interface Project {
   audio_duration: number | null;
   transcript: string | null;
   status: ProjectStatus;
+  progress: number | null;
   created_at: string;
   updated_at: string;
 }
