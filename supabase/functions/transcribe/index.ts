@@ -40,9 +40,9 @@ serve(async (req) => {
     const fileSizeMB = fileSizeBytes / (1024 * 1024);
     console.log(`Audio file size: ${fileSizeMB.toFixed(2)} MB`);
 
-    // Whisper API has a 25MB limit
+    // Whisper API has a 25MB limit - files should be compressed before upload
     if (fileSizeMB > 25) {
-      throw new Error(`Audio file too large (${fileSizeMB.toFixed(1)}MB). Whisper API limit is 25MB. Please compress or shorten the audio.`);
+      throw new Error(`Audio file is ${fileSizeMB.toFixed(1)}MB (Whisper limit: 25MB). The file should have been compressed before upload. Please re-upload the audio file.`);
     }
 
     // For files within limits, stream to a buffer and send to Whisper
