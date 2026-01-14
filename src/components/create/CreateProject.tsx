@@ -19,11 +19,13 @@ import {
   Download, 
   Check,
   RotateCcw,
-  Volume2
+  Volume2,
+  Zap
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
+import { needsCompression, compressAudio, CompressionProgress } from "@/utils/audioCompression";
 
 interface CreateProjectProps {
   onProjectCreated: (projectId: string) => void;
@@ -68,6 +70,7 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
   const [script, setScript] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStage, setUploadStage] = useState<string>("");
   const [dragActive, setDragActive] = useState(false);
   const [activeTab, setActiveTab] = useState<"audio" | "script">("audio");
   
@@ -97,13 +100,17 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
 
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const droppedFile = e.dataTransfer.files[0];
-      if (droppedFile.type === "audio/mpeg" || droppedFile.name.endsWith(".mp3")) {
+      // Accept any audio file type
+      if (droppedFile.type.startsWith("audio/")) {
         setFile(droppedFile);
         if (!title) {
-          setTitle(droppedFile.name.replace(".mp3", ""));
+          // Remove extension from filename for title
+          const fileName = droppedFile.name;
+          const lastDot = fileName.lastIndexOf('.');
+          setTitle(lastDot > 0 ? fileName.substring(0, lastDot) : fileName);
         }
       } else {
-        toast.error("Please upload an MP3 file");
+        toast.error("Please upload an audio file");
       }
     }
   }, [title]);
@@ -113,7 +120,10 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
       const selectedFile = e.target.files[0];
       setFile(selectedFile);
       if (!title) {
-        setTitle(selectedFile.name.replace(".mp3", ""));
+        // Remove extension from filename for title
+        const fileName = selectedFile.name;
+        const lastDot = fileName.lastIndexOf('.');
+        setTitle(lastDot > 0 ? fileName.substring(0, lastDot) : fileName);
       }
     }
   };
@@ -354,6 +364,7 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
 
     setUploading(true);
     setUploadProgress(0);
+    setUploadStage("");
 
     try {
       // Create project first (include user_id for RLS)
@@ -364,22 +375,62 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
         .single();
       if (projectError) throw projectError;
 
-      setUploadProgress(20);
+      setUploadProgress(10);
 
-      // Upload audio file
-      const fileExt = file.name.split(".").pop();
+      // Check if compression is needed
+      let fileToUpload: Blob = file;
+      let fileExt = file.name.split(".").pop() || "mp3";
+      
+      if (needsCompression(file)) {
+        const fileSizeMB = (file.size / (1024 * 1024)).toFixed(1);
+        setUploadStage(`Compressing audio (${fileSizeMB}MB)...`);
+        toast.info(`Large audio file detected (${fileSizeMB}MB). Compressing for transcription...`);
+        
+        try {
+          const result = await compressAudio(file, (progress: CompressionProgress) => {
+            // Map compression progress to 10-50% of total progress
+            const baseProgress = 10;
+            const compressionRange = 40;
+            
+            if (progress.stage === 'decoding') {
+              setUploadProgress(baseProgress + (progress.progress / 100) * (compressionRange / 2));
+              setUploadStage("Decoding audio...");
+            } else if (progress.stage === 'encoding') {
+              setUploadProgress(baseProgress + (compressionRange / 2) + (progress.progress / 100) * (compressionRange / 2));
+              setUploadStage("Encoding compressed audio...");
+            }
+          });
+          
+          fileToUpload = result.blob;
+          fileExt = "wav"; // Compressed output is WAV
+          
+          const originalMB = (result.originalSize / (1024 * 1024)).toFixed(1);
+          const compressedMB = (result.compressedSize / (1024 * 1024)).toFixed(1);
+          toast.success(`Compressed ${originalMB}MB → ${compressedMB}MB (${result.compressionRatio.toFixed(1)}x smaller)`);
+        } catch (compressionError: any) {
+          console.error("Compression error:", compressionError);
+          toast.error(compressionError.message || "Failed to compress audio");
+          throw compressionError;
+        }
+      }
+
+      setUploadProgress(50);
+      setUploadStage("Uploading audio...");
+
+      // Upload audio file (original or compressed)
       const filePath = `${project.id}/audio.${fileExt}`;
 
       const { error: uploadError } = await supabase.storage
         .from("audio")
-        .upload(filePath, file, {
+        .upload(filePath, fileToUpload, {
           cacheControl: "3600",
           upsert: true,
         });
 
       if (uploadError) throw uploadError;
 
-      setUploadProgress(80);
+      setUploadProgress(85);
+      setUploadStage("Finalizing...");
 
       // Get public URL
       const { data: urlData } = supabase.storage.from("audio").getPublicUrl(filePath);
@@ -393,6 +444,7 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
       if (updateError) throw updateError;
 
       setUploadProgress(100);
+      setUploadStage("");
       toast.success("Project created successfully!");
       
       // Reset form
@@ -407,6 +459,7 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
       toast.error(error.message || "Failed to create project");
     } finally {
       setUploading(false);
+      setUploadStage("");
     }
   };
 
@@ -465,7 +518,7 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
               >
                 <input
                   type="file"
-                  accept=".mp3,audio/mpeg"
+                  accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac"
                   onChange={handleFileSelect}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                   disabled={uploading}
@@ -479,6 +532,12 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
                         <p className="text-sm text-muted-foreground">
                           {(file.size / (1024 * 1024)).toFixed(2)} MB
                         </p>
+                        {needsCompression(file) && (
+                          <div className="flex items-center justify-center gap-1 mt-2 text-xs text-amber-500">
+                            <Zap className="h-3 w-3" />
+                            <span>Will be compressed for transcription</span>
+                          </div>
+                        )}
                       </div>
                     </>
                   ) : (
@@ -486,10 +545,13 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
                       <Upload className="h-16 w-16 mx-auto text-muted-foreground" />
                       <div>
                         <p className="text-lg font-medium text-foreground">
-                          Drag & drop your MP3 file here
+                          Drag & drop your audio file here
                         </p>
                         <p className="text-sm text-muted-foreground">
-                          or click to browse (25-80MB supported)
+                          MP3, WAV, or other audio formats
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Large files (&gt;20MB) will be compressed automatically
                         </p>
                       </div>
                     </>
@@ -647,7 +709,8 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
             <div className="space-y-2">
               <Progress value={uploadProgress} className="h-2" />
               <p className="text-sm text-center text-muted-foreground">
-                Uploading... {uploadProgress}%
+                {uploadStage || `Uploading... ${uploadProgress}%`}
+                {uploadStage && ` (${uploadProgress}%)`}
               </p>
             </div>
           )}
