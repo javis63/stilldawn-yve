@@ -185,16 +185,18 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
           body: JSON.stringify({
             text: chunk.text,
             voice: "onyx",
+            chunkId: `preview_${chunk.id}`,
           }),
         }
       );
 
       if (!response.ok) {
-        throw new Error("Failed to generate audio");
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to generate audio");
       }
 
-      const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
+      // Now returns JSON with audioUrl instead of binary
+      const { audioUrl } = await response.json();
       
       setChunks(prev => prev.map(c => 
         c.id === chunk.id ? { ...c, audioUrl, status: "ready" } : c
@@ -211,7 +213,7 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
 
     } catch (error: any) {
       console.error("Error generating chunk audio:", error);
-      toast.error(`Failed to generate audio for chunk ${chunk.id}`);
+      toast.error(`Failed to generate audio for chunk ${chunk.id}: ${error.message}`);
       setChunks(prev => prev.map(c => 
         c.id === chunk.id ? { ...c, status: "error" } : c
       ));
@@ -240,8 +242,8 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
 
       toast.info("Generating full audio... This may take a few minutes.");
 
-      // Generate audio for each chunk sequentially and collect them
-      const audioBlobs: Blob[] = [];
+      // Generate audio for each chunk sequentially and collect URLs
+      const audioUrls: string[] = [];
       
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -266,24 +268,28 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
             body: JSON.stringify({
               text: chunk.text,
               voice: "onyx",
-              // Pass context for request stitching
-              previousText: i > 0 ? chunks[i - 1].text.slice(-200) : undefined,
-              nextText: i < chunks.length - 1 ? chunks[i + 1].text.slice(0, 200) : undefined,
+              chunkId: `${project.id}_chunk_${i}`,
             }),
           }
         );
 
         if (!response.ok) {
-          throw new Error(`Failed to generate audio for chunk ${i + 1}`);
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `Failed to generate audio for chunk ${i + 1}`);
         }
 
-        const audioBlob = await response.blob();
-        audioBlobs.push(audioBlob);
+        const { audioUrl } = await response.json();
+        audioUrls.push(audioUrl);
       }
 
       setDownloadProgress(75);
 
-      // Combine all audio blobs
+      // Download and combine all audio chunks
+      const audioBlobs: Blob[] = [];
+      for (const url of audioUrls) {
+        const res = await fetch(url);
+        audioBlobs.push(await res.blob());
+      }
       const combinedBlob = new Blob(audioBlobs, { type: "audio/mpeg" });
       
       // Upload combined audio to storage
