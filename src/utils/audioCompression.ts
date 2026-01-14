@@ -3,11 +3,15 @@
  * 
  * Compresses audio files to reduce size while maintaining quality for transcription.
  * Uses Web Audio API to decode and re-encode audio at a lower bitrate.
+ * 
+ * For long audio (>50 minutes), the compressed file may exceed 25MB but the
+ * server will handle chunked transcription automatically.
  */
 
 export interface CompressionProgress {
   stage: 'decoding' | 'encoding' | 'complete';
   progress: number;
+  message?: string;
 }
 
 export interface CompressionResult {
@@ -18,14 +22,12 @@ export interface CompressionResult {
   duration: number;
 }
 
-// Target: 64kbps mono audio is plenty for speech recognition
-// 60 minutes at 64kbps = ~28.8MB (under Whisper's 25MB limit with some margin)
-const TARGET_SAMPLE_RATE = 16000; // 16kHz is optimal for speech recognition
-const TARGET_BITRATE = 64000; // 64kbps
+// Target: 16kHz mono audio is optimal for speech recognition
+const TARGET_SAMPLE_RATE = 16000;
 
 /**
  * Check if compression is needed based on file size
- * Whisper API limit is 25MB, we compress if over 20MB to be safe
+ * We compress if over 20MB to reduce upload time and server processing
  */
 export function needsCompression(file: File): boolean {
   const MAX_SIZE_MB = 20;
@@ -35,15 +37,16 @@ export function needsCompression(file: File): boolean {
 
 /**
  * Estimate compressed size based on duration
- * At 64kbps: size (bytes) = (bitrate / 8) * duration_seconds
+ * At 16kHz 16-bit mono WAV: ~1.92 MB per minute
  */
 export function estimateCompressedSize(durationSeconds: number): number {
-  return (TARGET_BITRATE / 8) * durationSeconds;
+  // 16kHz * 2 bytes per sample * 1 channel = 32000 bytes per second
+  return 32000 * durationSeconds;
 }
 
 /**
- * Compress audio file using Web Audio API and MediaRecorder
- * Falls back to original file if compression fails or isn't supported
+ * Compress audio file using Web Audio API
+ * Converts to 16kHz mono WAV which is optimal for Whisper transcription
  */
 export async function compressAudio(
   file: File,
@@ -51,8 +54,7 @@ export async function compressAudio(
 ): Promise<CompressionResult> {
   const originalSize = file.size;
   
-  // Report initial progress
-  onProgress?.({ stage: 'decoding', progress: 0 });
+  onProgress?.({ stage: 'decoding', progress: 0, message: 'Reading audio file...' });
 
   try {
     // Create audio context
@@ -62,22 +64,18 @@ export async function compressAudio(
 
     // Read file as array buffer
     const arrayBuffer = await file.arrayBuffer();
-    onProgress?.({ stage: 'decoding', progress: 30 });
+    onProgress?.({ stage: 'decoding', progress: 30, message: 'Decoding audio...' });
 
     // Decode audio data
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    onProgress?.({ stage: 'decoding', progress: 60 });
+    onProgress?.({ stage: 'decoding', progress: 60, message: 'Audio decoded' });
 
     const duration = audioBuffer.duration;
+    const durationMinutes = Math.round(duration / 60);
     
-    // Check if compressed size would still be too large (over 24MB)
-    const estimatedSize = estimateCompressedSize(duration);
-    if (estimatedSize > 24 * 1024 * 1024) {
-      throw new Error(
-        `Audio is too long (${Math.round(duration / 60)} minutes). ` +
-        `Maximum supported duration is approximately 50 minutes. ` +
-        `Please split or trim your audio file.`
-      );
+    // Log info about long audio
+    if (duration > 3000) { // > 50 minutes
+      console.log(`Long audio detected (${durationMinutes} minutes). Server will handle chunked transcription.`);
     }
 
     // Create offline context for rendering
@@ -93,15 +91,15 @@ export async function compressAudio(
     source.connect(offlineContext.destination);
     source.start(0);
 
-    onProgress?.({ stage: 'encoding', progress: 0 });
+    onProgress?.({ stage: 'encoding', progress: 0, message: 'Compressing audio...' });
 
     // Render to get resampled audio
     const renderedBuffer = await offlineContext.startRendering();
-    onProgress?.({ stage: 'encoding', progress: 30 });
+    onProgress?.({ stage: 'encoding', progress: 30, message: 'Encoding WAV...' });
 
     // Convert to WAV format (universally supported, good for Whisper)
     const wavBlob = audioBufferToWav(renderedBuffer);
-    onProgress?.({ stage: 'encoding', progress: 90 });
+    onProgress?.({ stage: 'encoding', progress: 90, message: 'Finalizing...' });
 
     // Close audio context
     await audioContext.close();
@@ -109,13 +107,13 @@ export async function compressAudio(
     const compressedSize = wavBlob.size;
     const compressionRatio = originalSize / compressedSize;
 
-    onProgress?.({ stage: 'complete', progress: 100 });
+    onProgress?.({ stage: 'complete', progress: 100, message: 'Complete' });
 
     console.log(`Audio compression complete:
       Original: ${(originalSize / (1024 * 1024)).toFixed(2)} MB
       Compressed: ${(compressedSize / (1024 * 1024)).toFixed(2)} MB
       Ratio: ${compressionRatio.toFixed(2)}x
-      Duration: ${Math.round(duration)}s`);
+      Duration: ${durationMinutes} minutes`);
 
     return {
       blob: wavBlob,
