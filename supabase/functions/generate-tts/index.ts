@@ -54,9 +54,9 @@ async function generateTTSChunk(text: string, apiKey: string, voice: string): Pr
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: 'tts-1',
-      input: text,
+      body: JSON.stringify({
+        model: 'tts-1-hd',
+        input: text,
       voice: voice,
       response_format: 'mp3',
     }),
