@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -39,7 +40,6 @@ async function generateTTSWithRetry(
         throw new Error(`TTS failed: ${errorText}`);
       }
 
-      // Read the response body
       const audioBuffer = await response.arrayBuffer();
       console.log(`Successfully generated ${audioBuffer.byteLength} bytes of audio`);
       return audioBuffer;
@@ -49,7 +49,6 @@ async function generateTTSWithRetry(
       console.error(`TTS attempt ${attempt} failed:`, error.message);
       
       if (attempt < maxRetries) {
-        // Wait before retrying (exponential backoff: 1s, 2s, 4s)
         const waitTime = Math.pow(2, attempt - 1) * 1000;
         console.log(`Waiting ${waitTime}ms before retry...`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
@@ -61,13 +60,12 @@ async function generateTTSWithRetry(
 }
 
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { text, voice, speed } = await req.json();
+    const { text, voice, speed, chunkId } = await req.json();
 
     if (!text) {
       throw new Error("Text is required");
@@ -78,7 +76,14 @@ serve(async (req) => {
       throw new Error("OpenAI API key not configured");
     }
 
-    console.log(`Generating TTS for ${text.length} characters`);
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
+    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+      throw new Error("Supabase configuration missing");
+    }
+
+    console.log(`Generating TTS for ${text.length} characters, chunkId: ${chunkId}`);
 
     // Generate audio with retry logic
     const audioBuffer = await generateTTSWithRetry(
@@ -88,12 +93,45 @@ serve(async (req) => {
       OPENAI_API_KEY
     );
 
-    return new Response(audioBuffer, {
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "audio/mpeg",
-      },
-    });
+    // Upload to Supabase Storage
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    
+    // Generate unique filename using timestamp and chunkId
+    const timestamp = Date.now();
+    const uniqueId = chunkId || crypto.randomUUID();
+    const filePath = `chunks/${timestamp}_${uniqueId}.mp3`;
+
+    console.log(`Uploading audio to storage: ${filePath}`);
+
+    const { error: uploadError } = await supabase.storage
+      .from("audio")
+      .upload(filePath, audioBuffer, {
+        contentType: "audio/mpeg",
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error("Storage upload error:", uploadError);
+      throw new Error(`Failed to upload audio: ${uploadError.message}`);
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from("audio")
+      .getPublicUrl(filePath);
+
+    console.log(`Audio uploaded successfully: ${urlData.publicUrl}`);
+
+    return new Response(
+      JSON.stringify({ 
+        audioUrl: urlData.publicUrl,
+        byteSize: audioBuffer.byteLength 
+      }),
+      {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
   } catch (error: any) {
     console.error("Error generating TTS chunk:", error);
     return new Response(
