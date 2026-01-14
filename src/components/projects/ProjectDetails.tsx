@@ -192,9 +192,89 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     }
 
     setProcessing("timestamps");
-    toast.info("Generating timestamps with Whisper... This may take a minute.");
+    toast.info("Generating transcript with Whisper... This may take a while for long audio.");
 
     try {
+      // Prefer chunked transcription when the audio file is large.
+      // This avoids edge-function memory limits when someone uploaded a huge WAV.
+      let shouldUseChunks = false;
+      try {
+        const head = await fetch(currentProject.audio_url, { method: "HEAD" });
+        const len = head.headers.get("content-length");
+        if (len && parseInt(len, 10) > 25 * 1024 * 1024) {
+          shouldUseChunks = true;
+        }
+      } catch {
+        // If HEAD fails, fall back to the original flow.
+      }
+
+      if (shouldUseChunks) {
+        // Discover chunk files from storage: {projectId}/chunk_0.wav, chunk_1.wav, ...
+        const { data: files, error: listError } = await supabase.storage
+          .from("audio")
+          .list(currentProject.id, {
+            limit: 1000,
+            sortBy: { column: "name", order: "asc" },
+          });
+
+        if (listError) throw listError;
+
+        const chunkFiles = (files || [])
+          .map((f) => f.name)
+          .map((name) => {
+            const match = name.match(/^chunk_(\d+)\.wav$/);
+            return match ? { name, index: parseInt(match[1], 10) } : null;
+          })
+          .filter((x): x is { name: string; index: number } => !!x)
+          .sort((a, b) => a.index - b.index);
+
+        if (chunkFiles.length === 0) {
+          throw new Error(
+            "This audio file is too large to process as a single file, and no audio chunks were found for this project. Please re-upload using the new uploader (it will auto-chunk long audio)."
+          );
+        }
+
+        const transcripts: string[] = [];
+        let totalDuration = 0;
+
+        for (let i = 0; i < chunkFiles.length; i++) {
+          toast.info(`Transcribing chunk ${i + 1}/${chunkFiles.length}...`);
+
+          const { data: urlData } = supabase.storage
+            .from("audio")
+            .getPublicUrl(`${currentProject.id}/${chunkFiles[i].name}`);
+
+          const { data, error } = await supabase.functions.invoke("transcribe-chunk", {
+            body: {
+              audioUrl: urlData.publicUrl,
+              chunkIndex: i,
+              totalChunks: chunkFiles.length,
+            },
+          });
+
+          if (error) throw error;
+          if (!data?.success) throw new Error(data?.error || `Transcription failed for chunk ${i + 1}`);
+
+          transcripts.push(data.text);
+          totalDuration += Number(data.duration || 0);
+        }
+
+        const fullTranscript = transcripts.join(" ");
+
+        // Update project in DB (and local state)
+        setCurrentProject((prev) => ({
+          ...prev,
+          transcript: fullTranscript,
+          audio_duration: totalDuration || prev.audio_duration,
+          status: "processing" as const,
+        }));
+
+        toast.success("Transcription complete!");
+        onRefresh();
+        return;
+      }
+
+      // Small audio: use the original single-file transcription function
       const { data, error } = await supabase.functions.invoke('transcribe', {
         body: {
           projectId: currentProject.id,
@@ -205,7 +285,6 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
       if (error) throw error;
       if (!data.success) throw new Error(data.error || 'Transcription failed');
 
-      // Update local project state
       setCurrentProject(prev => ({
         ...prev,
         transcript: data.transcript,
