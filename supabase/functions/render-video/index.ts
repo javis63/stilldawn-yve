@@ -156,100 +156,38 @@ async function processRender(
       }
     }
 
-    // Step 1: Generate images for each scene if not already generated
-    console.log(`[BG] Processing ${scenes.length} scenes for images...`);
-    const imagePromises = scenes.map(async (scene: any, i: number) => {
+    // Step 1: Collect existing images/videos - NO image generation
+    console.log(`[BG] Processing ${scenes.length} scenes for media...`);
+    const mediaResults = scenes.map((scene: any, i: number) => {
+      // Prefer video_url over image_url
+      if (scene.video_url) {
+        console.log(`[BG] Scene ${i + 1} has video: ${scene.video_url}`);
+        return { index: i, url: scene.video_url, type: 'video' };
+      }
       if (scene.image_url) {
-        console.log(`[BG] Scene ${i + 1} already has image`);
-        return { index: i, url: scene.image_url };
+        console.log(`[BG] Scene ${i + 1} has image: ${scene.image_url}`);
+        return { index: i, url: scene.image_url, type: 'image' };
       }
-      
-      if (!scene.visual_prompt) {
-        return { index: i, url: null };
-      }
-
-      console.log(`[BG] Generating image for scene ${i + 1}`);
-      
-      try {
-        const output = await replicate.run(
-          "black-forest-labs/flux-schnell",
-          {
-            input: {
-              prompt: scene.visual_prompt,
-              go_fast: true,
-              megapixels: "1",
-              num_outputs: 1,
-              aspect_ratio: "16:9",
-              output_format: "png",
-              output_quality: 90,
-              num_inference_steps: 4
-            }
-          }
-        ) as string[];
-
-        if (output && output[0]) {
-          await supabase
-            .from('scenes')
-            .update({ image_url: output[0] })
-            .eq('id', scene.id);
-            
-          console.log(`[BG] Generated image for scene ${i + 1}`);
-          return { index: i, url: output[0] };
-        }
-      } catch (imgError) {
-        console.error(`[BG] Failed to generate image for scene ${i + 1}:`, imgError);
-      }
-      
-      return { index: i, url: null };
+      console.log(`[BG] Scene ${i + 1} has no media`);
+      return { index: i, url: null, type: null };
     });
 
-    const imageResults = await Promise.all(imagePromises);
-    const sortedImages = imageResults.sort((a, b) => a.index - b.index);
+    const sortedImages = mediaResults.sort((a, b) => a.index - b.index);
     let validImages = sortedImages.filter(r => r.url).map(r => r.url!);
 
-    console.log(`[BG] Generated ${validImages.length} images`);
+    console.log(`[BG] Found ${validImages.length} media items`);
 
-    // Step 1b: Apply Ken Burns effect
-    console.log('[BG] Applying Ken Burns effect...');
-    const kenBurnsPromises = validImages.map(async (imageUrl, i) => {
-      try {
-        console.log(`[BG] Ken Burns for image ${i + 1}/${validImages.length}`);
-        const output = await replicate.run(
-          "sniklaus/3d-ken-burns:61c026e96be87de9d7cb3a8e9a8f6bdcf9b6bc57c6ea0cc25c6ccc6cd5c98abe",
-          {
-            input: {
-              image: imageUrl,
-              shift_x: 0.0,
-              shift_y: 0.0,
-              focus_x: 0.5,
-              focus_y: 0.5,
-              zoom: 1.15,
-              duration: Math.min(5, (scenes[i]?.end_time - scenes[i]?.start_time) || 3),
-              fps: 25
-            }
-          }
-        ) as string | string[];
-        
-        const resultUrl = Array.isArray(output) ? output[0] : output;
-        console.log(`[BG] Ken Burns complete for image ${i + 1}`);
-        return { index: i, url: resultUrl, type: 'video' };
-      } catch (kbError) {
-        console.error(`[BG] Ken Burns failed for image ${i + 1}:`, kbError);
-        return { index: i, url: imageUrl, type: 'image' };
-      }
-    });
-
-    const kenBurnsResults = await Promise.all(kenBurnsPromises);
-    const kenBurnsVideos = kenBurnsResults.sort((a, b) => a.index - b.index);
-    validImages = kenBurnsVideos.map(r => r.url);
-    console.log(`[BG] Ken Burns: ${kenBurnsVideos.filter(r => r.type === 'video').length}/${kenBurnsVideos.length} scenes`);
+    // Check if we have any videos vs images
+    const hasVideos = mediaResults.some(r => r.type === 'video');
+    const hasImages = mediaResults.some(r => r.type === 'image');
+    console.log(`[BG] Media types: ${hasVideos ? 'videos' : ''} ${hasImages ? 'images' : ''}`);
 
     if (validImages.length === 0) {
-      throw new Error('No images available for video generation');
+      throw new Error('No media (images or videos) available for video generation');
     }
 
-    // Step 2: Create slideshow video
-    console.log('[BG] Creating slideshow video...');
+    // Step 2: Create final video
+    console.log('[BG] Creating final video...');
 
     let finalVideoUrl: string | null = null;
     let audioMuxWarning: string | null = null;
@@ -290,33 +228,65 @@ async function processRender(
       return null;
     };
 
-    const orderedSceneImages = sortedImages.map((r) => r.url as string | null);
-    const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
-    const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
+    // Use first scene's video/image directly if only one scene with video
+    const scenesWithVideo = mediaResults.filter(r => r.type === 'video');
+    const scenesWithImage = mediaResults.filter(r => r.type === 'image');
+    
+    let baseVideoUrl: string | null = null;
+    
+    // If we have videos, use the first video directly (or concatenate if multiple)
+    if (scenesWithVideo.length > 0) {
+      if (scenesWithVideo.length === 1) {
+        // Single video - use it directly
+        baseVideoUrl = scenesWithVideo[0].url;
+        console.log('[BG] Using single video directly:', baseVideoUrl);
+      } else {
+        // Multiple videos - try to concatenate them
+        console.log(`[BG] Concatenating ${scenesWithVideo.length} videos...`);
+        try {
+          // Use ffmpeg-based video concatenation via replicate
+          const concatOut = await replicate.run(
+            "fofr/video-concat:50ee2c50c05cb8fcb1dbbc1d1e3e0bbe08f912e1e0f1e2e1e3e0bbe08f912e1e",
+            {
+              input: {
+                video_urls: scenesWithVideo.map(s => s.url).join(','),
+              },
+            }
+          );
+          baseVideoUrl = extractUrl(concatOut);
+        } catch (concatErr) {
+          console.error('[BG] Video concat failed, using first video:', concatErr);
+          baseVideoUrl = scenesWithVideo[0].url;
+        }
+      }
+    } else if (scenesWithImage.length > 0) {
+      // Only images - create slideshow
+      const orderedSceneImages = sortedImages.map((r) => r.url as string | null);
+      const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
+      const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
 
-    let durationPerImage = Math.min(10, Math.max(0.1, Math.ceil(targetDurationSec / 50)));
-    if (!Number.isFinite(durationPerImage) || durationPerImage <= 0) durationPerImage = 1;
+      let durationPerImage = Math.min(10, Math.max(0.1, Math.ceil(targetDurationSec / 50)));
+      if (!Number.isFinite(durationPerImage) || durationPerImage <= 0) durationPerImage = 1;
 
-    const imagesForSlideshow: string[] = [];
-    for (let i = 0; i < scenes.length; i++) {
-      const scene = scenes[i];
-      const img = orderedSceneImages[i] || validImages[0];
-      if (!img) continue;
+      const imagesForSlideshow: string[] = [];
+      for (let i = 0; i < scenes.length; i++) {
+        const scene = scenes[i];
+        const img = orderedSceneImages[i] || validImages[0];
+        if (!img) continue;
 
-      const start = Number(scene?.start_time ?? 0);
-      const end = Number(scene?.end_time ?? start + durationPerImage);
-      const sceneDur = Math.max(0.1, end - start);
-      const repeats = Math.max(1, Math.ceil(sceneDur / durationPerImage));
+        const start = Number(scene?.start_time ?? 0);
+        const end = Number(scene?.end_time ?? start + durationPerImage);
+        const sceneDur = Math.max(0.1, end - start);
+        const repeats = Math.max(1, Math.ceil(sceneDur / durationPerImage));
 
-      for (let r = 0; r < repeats; r++) imagesForSlideshow.push(img);
-    }
+        for (let r = 0; r < repeats; r++) imagesForSlideshow.push(img);
+      }
 
-    while (imagesForSlideshow.length < 2 && validImages[0]) imagesForSlideshow.push(validImages[0]);
-    if (imagesForSlideshow.length > 50) imagesForSlideshow.length = 50;
+      while (imagesForSlideshow.length < 2 && validImages[0]) imagesForSlideshow.push(validImages[0]);
+      if (imagesForSlideshow.length > 50) imagesForSlideshow.length = 50;
 
-    console.log(`[BG] Slideshow: ${imagesForSlideshow.length} frames, ${durationPerImage}s each, target: ${targetDurationSec}s`);
+      console.log(`[BG] Slideshow: ${imagesForSlideshow.length} frames, ${durationPerImage}s each, target: ${targetDurationSec}s`);
 
-    try {
       const slideshowOut = await replicate.run(
         "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
         {
@@ -331,11 +301,18 @@ async function processRender(
         }
       );
 
-      const slideshowVideoUrl = extractUrl(slideshowOut);
-      if (!slideshowVideoUrl) throw new Error('slideshow model returned no video url');
-      console.log('[BG] Slideshow video generated:', slideshowVideoUrl);
+      baseVideoUrl = extractUrl(slideshowOut);
+    }
 
-      let muxedVideoUrl = slideshowVideoUrl;
+    if (!baseVideoUrl) {
+      throw new Error('Failed to create base video from media');
+    }
+    
+    console.log('[BG] Base video ready:', baseVideoUrl);
+
+    // Step 3: Mux audio with video
+    let muxedVideoUrl = baseVideoUrl;
+    try {
       if (finalAudioUrl) {
         try {
           console.log('[BG] Muxing narration audio...');
@@ -343,7 +320,7 @@ async function processRender(
             "lucataco/video-audio-merge",
             {
               input: {
-                video_file: slideshowVideoUrl,
+                video_file: baseVideoUrl,
                 audio_file: finalAudioUrl,
                 duration_mode: "audio",
               },
@@ -451,21 +428,51 @@ async function processRender(
       }
     }
 
-    // Generate subtitles
+    // Generate subtitles - split into short 1-2 sentence chunks for readability
     let srtContent = '';
     let vttContent = 'WEBVTT\n\n';
+    let subtitleIndex = 1;
     
-    scenes.forEach((scene: any, index: number) => {
-      const startTime = scene.start_time || 0;
-      const endTime = scene.end_time || startTime + 5;
+    scenes.forEach((scene: any) => {
+      const sceneStart = scene.start_time || 0;
+      const sceneEnd = scene.end_time || sceneStart + 5;
+      const sceneDuration = sceneEnd - sceneStart;
       
-      const srtStart = formatSrtTime(startTime);
-      const srtEnd = formatSrtTime(endTime);
-      srtContent += `${index + 1}\n${srtStart} --> ${srtEnd}\n${scene.narration}\n\n`;
+      // Split narration into sentences
+      const sentences = scene.narration.match(/[^.!?]+[.!?]+/g) || [scene.narration];
       
-      const vttStart = formatVttTime(startTime);
-      const vttEnd = formatVttTime(endTime);
-      vttContent += `${vttStart} --> ${vttEnd}\n${scene.narration}\n\n`;
+      // Group sentences into 1-2 per subtitle (max ~80 chars per subtitle)
+      const subtitleChunks: string[] = [];
+      let currentChunk = '';
+      
+      for (const sentence of sentences) {
+        const trimmed = sentence.trim();
+        if (currentChunk.length + trimmed.length > 80 && currentChunk) {
+          subtitleChunks.push(currentChunk.trim());
+          currentChunk = trimmed;
+        } else {
+          currentChunk += (currentChunk ? ' ' : '') + trimmed;
+        }
+      }
+      if (currentChunk.trim()) subtitleChunks.push(currentChunk.trim());
+      
+      // Distribute chunks evenly across scene duration
+      const chunkDuration = subtitleChunks.length > 0 ? sceneDuration / subtitleChunks.length : sceneDuration;
+      
+      subtitleChunks.forEach((chunk, i) => {
+        const chunkStart = sceneStart + (i * chunkDuration);
+        const chunkEnd = Math.min(chunkStart + chunkDuration, sceneEnd);
+        
+        const srtStart = formatSrtTime(chunkStart);
+        const srtEnd = formatSrtTime(chunkEnd);
+        srtContent += `${subtitleIndex}\n${srtStart} --> ${srtEnd}\n${chunk}\n\n`;
+        
+        const vttStart = formatVttTime(chunkStart);
+        const vttEnd = formatVttTime(chunkEnd);
+        vttContent += `${vttStart} --> ${vttEnd}\n${chunk}\n\n`;
+        
+        subtitleIndex++;
+      });
     });
 
     // Generate viral thumbnail
