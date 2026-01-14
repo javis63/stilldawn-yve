@@ -25,7 +25,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
-import { needsCompression, compressAudio, CompressionProgress } from "@/utils/audioCompression";
+import { splitAudioIntoChunks, getAudioDuration, ChunkingProgress } from "@/utils/audioChunking";
 
 interface CreateProjectProps {
   onProjectCreated: (projectId: string) => void;
@@ -358,7 +358,7 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
       return;
     }
     if (!file) {
-      toast.error("Please upload an MP3 file");
+      toast.error("Please upload an audio file");
       return;
     }
 
@@ -375,78 +375,136 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
         .single();
       if (projectError) throw projectError;
 
-      setUploadProgress(10);
+      setUploadProgress(5);
+      setUploadStage("Analyzing audio...");
 
-      // Check if compression is needed
-      let fileToUpload: Blob = file;
-      let fileExt = file.name.split(".").pop() || "mp3";
+      // Get audio duration to determine if we need chunking
+      const duration = await getAudioDuration(file);
+      const durationMinutes = Math.round(duration / 60);
+      const fileSizeMB = file.size / (1024 * 1024);
       
-      if (needsCompression(file)) {
-        const fileSizeMB = (file.size / (1024 * 1024)).toFixed(1);
-        setUploadStage(`Compressing audio (${fileSizeMB}MB)...`);
-        toast.info(`Large audio file detected (${fileSizeMB}MB). Compressing for transcription...`);
+      console.log(`Audio: ${durationMinutes} minutes, ${fileSizeMB.toFixed(1)}MB`);
+
+      // For long audio (>15 min) or large files (>20MB), use chunked processing
+      const needsChunking = duration > 900 || fileSizeMB > 20;
+      
+      if (needsChunking) {
+        toast.info(`Processing ${durationMinutes} minute audio in chunks...`);
         
-        try {
-          const result = await compressAudio(file, (progress: CompressionProgress) => {
-            // Map compression progress to 10-50% of total progress
-            const baseProgress = 10;
-            const compressionRange = 40;
-            
-            if (progress.stage === 'decoding') {
-              setUploadProgress(baseProgress + (progress.progress / 100) * (compressionRange / 2));
-              setUploadStage("Decoding audio...");
-            } else if (progress.stage === 'encoding') {
-              setUploadProgress(baseProgress + (compressionRange / 2) + (progress.progress / 100) * (compressionRange / 2));
-              setUploadStage("Encoding compressed audio...");
+        // Split audio into chunks
+        const { chunks: audioChunks, totalDuration } = await splitAudioIntoChunks(
+          file, 
+          (progress: ChunkingProgress) => {
+            const baseProgress = 5;
+            const chunkingRange = 30;
+            setUploadProgress(baseProgress + (progress.progress / 100) * chunkingRange);
+            setUploadStage(progress.message);
+          }
+        );
+
+        setUploadProgress(35);
+        setUploadStage(`Uploading ${audioChunks.length} chunks...`);
+
+        // Upload all chunks to storage
+        const chunkUrls: string[] = [];
+        for (let i = 0; i < audioChunks.length; i++) {
+          const chunk = audioChunks[i];
+          const chunkPath = `${project.id}/chunk_${i}.wav`;
+          
+          const { error: uploadError } = await supabase.storage
+            .from("audio")
+            .upload(chunkPath, chunk.blob, { cacheControl: "3600", upsert: true });
+          
+          if (uploadError) throw uploadError;
+          
+          const { data: urlData } = supabase.storage.from("audio").getPublicUrl(chunkPath);
+          chunkUrls.push(urlData.publicUrl);
+          
+          const uploadProgress = 35 + ((i + 1) / audioChunks.length) * 25;
+          setUploadProgress(uploadProgress);
+          setUploadStage(`Uploaded chunk ${i + 1}/${audioChunks.length}`);
+        }
+
+        setUploadProgress(60);
+        setUploadStage("Transcribing audio...");
+
+        // Transcribe each chunk
+        const transcripts: string[] = [];
+        for (let i = 0; i < chunkUrls.length; i++) {
+          setUploadStage(`Transcribing chunk ${i + 1}/${chunkUrls.length}...`);
+          
+          const response = await supabase.functions.invoke('transcribe-chunk', {
+            body: { 
+              audioUrl: chunkUrls[i], 
+              chunkIndex: i, 
+              totalChunks: chunkUrls.length 
             }
           });
+
+          if (response.error) {
+            throw new Error(response.error.message || `Failed to transcribe chunk ${i + 1}`);
+          }
+
+          if (!response.data?.success) {
+            throw new Error(response.data?.error || `Transcription failed for chunk ${i + 1}`);
+          }
+
+          transcripts.push(response.data.text);
           
-          fileToUpload = result.blob;
-          fileExt = "wav"; // Compressed output is WAV
-          
-          const originalMB = (result.originalSize / (1024 * 1024)).toFixed(1);
-          const compressedMB = (result.compressedSize / (1024 * 1024)).toFixed(1);
-          toast.success(`Compressed ${originalMB}MB → ${compressedMB}MB (${result.compressionRatio.toFixed(1)}x smaller)`);
-        } catch (compressionError: any) {
-          console.error("Compression error:", compressionError);
-          toast.error(compressionError.message || "Failed to compress audio");
-          throw compressionError;
+          const transcribeProgress = 60 + ((i + 1) / chunkUrls.length) * 30;
+          setUploadProgress(transcribeProgress);
         }
+
+        // Combine all transcripts
+        const fullTranscript = transcripts.join(' ');
+
+        // Update project with transcript
+        const { error: updateError } = await supabase
+          .from("projects")
+          .update({ 
+            audio_url: chunkUrls[0], // Use first chunk URL as reference
+            transcript: fullTranscript,
+            audio_duration: totalDuration,
+            status: 'processing'
+          })
+          .eq("id", project.id);
+
+        if (updateError) throw updateError;
+
+        setUploadProgress(100);
+        toast.success(`Transcribed ${durationMinutes} minutes of audio successfully!`);
+        
+      } else {
+        // Small file - upload directly and use simple transcription
+        setUploadProgress(20);
+        setUploadStage("Uploading audio...");
+
+        const fileExt = file.name.split(".").pop() || "mp3";
+        const filePath = `${project.id}/audio.${fileExt}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("audio")
+          .upload(filePath, file, { cacheControl: "3600", upsert: true });
+
+        if (uploadError) throw uploadError;
+
+        setUploadProgress(60);
+        setUploadStage("Preparing transcription...");
+
+        const { data: urlData } = supabase.storage.from("audio").getPublicUrl(filePath);
+
+        // Update project with audio URL
+        const { error: updateError } = await supabase
+          .from("projects")
+          .update({ audio_url: urlData.publicUrl })
+          .eq("id", project.id);
+
+        if (updateError) throw updateError;
+
+        setUploadProgress(100);
+        toast.success("Project created successfully!");
       }
 
-      setUploadProgress(50);
-      setUploadStage("Uploading audio...");
-
-      // Upload audio file (original or compressed)
-      const filePath = `${project.id}/audio.${fileExt}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("audio")
-        .upload(filePath, fileToUpload, {
-          cacheControl: "3600",
-          upsert: true,
-        });
-
-      if (uploadError) throw uploadError;
-
-      setUploadProgress(85);
-      setUploadStage("Finalizing...");
-
-      // Get public URL
-      const { data: urlData } = supabase.storage.from("audio").getPublicUrl(filePath);
-
-      // Update project with audio URL
-      const { error: updateError } = await supabase
-        .from("projects")
-        .update({ audio_url: urlData.publicUrl })
-        .eq("id", project.id);
-
-      if (updateError) throw updateError;
-
-      setUploadProgress(100);
-      setUploadStage("");
-      toast.success("Project created successfully!");
-      
       // Reset form
       setTitle("");
       setFile(null);
@@ -532,10 +590,10 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
                         <p className="text-sm text-muted-foreground">
                           {(file.size / (1024 * 1024)).toFixed(2)} MB
                         </p>
-                        {needsCompression(file) && (
+                        {file.size > 20 * 1024 * 1024 && (
                           <div className="flex items-center justify-center gap-1 mt-2 text-xs text-amber-500">
                             <Zap className="h-3 w-3" />
-                            <span>Will be compressed for transcription</span>
+                            <span>Will be processed in chunks for transcription</span>
                           </div>
                         )}
                       </div>
