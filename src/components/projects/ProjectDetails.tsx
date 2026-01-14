@@ -290,6 +290,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
             narration: s.narration,
             visual_prompt: s.visual_prompt,
             image_url: s.image_url,
+            video_url: s.video_url,
           })),
           audioUrl: currentProject.audio_url,
           audioDuration: currentProject.audio_duration,
