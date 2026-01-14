@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,6 +32,7 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [deleting, setDeleting] = useState(false);
+
   const fetchProjects = async () => {
     setLoading(true);
     try {
@@ -50,6 +52,32 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
 
   useEffect(() => {
     fetchProjects();
+
+    // Subscribe to realtime updates for progress tracking
+    const channel = supabase
+      .channel('projects-progress')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'projects',
+        },
+        (payload) => {
+          console.log('Project update:', payload);
+          const updatedProject = payload.new as Project;
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === updatedProject.id ? { ...p, ...updatedProject } : p
+            )
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const handleDeleteProject = async () => {
@@ -180,12 +208,18 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
                     <div className="flex items-center gap-2 mt-1">
                       <span className={`text-xs capitalize ${getStatusColor(project.status)}`}>
                         {project.status}
+                        {project.status === "processing" && project.progress && project.progress > 0 && (
+                          <span className="ml-1">({project.progress}%)</span>
+                        )}
                       </span>
                       <span className="text-xs text-muted-foreground flex items-center gap-1">
                         <Clock className="h-3 w-3" />
                         {formatDistanceToNow(new Date(project.created_at), { addSuffix: true })}
                       </span>
                     </div>
+                    {project.status === "processing" && project.progress && project.progress > 0 && (
+                      <Progress value={project.progress} className="h-1 mt-2" />
+                    )}
                   </div>
                   <Button
                     variant="ghost"
