@@ -196,12 +196,14 @@ serve(async (req) => {
 
     const transcription = await whisperResponse.json();
     console.log('Transcription complete, duration:', transcription.duration);
+    console.log('Word timestamps count:', transcription.words?.length || 0);
 
-    // Update project with duration
+    // Update project with duration and word timestamps for subtitle sync
     await supabase
       .from('projects')
       .update({
         audio_duration: transcription.duration,
+        word_timestamps: transcription.words || [],
         status: 'processing',
       })
       .eq('id', projectId);

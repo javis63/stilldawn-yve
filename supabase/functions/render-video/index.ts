@@ -126,7 +126,8 @@ async function processRender(
   audioDuration: number | null,
   thumbnailImageUrl: string | null,
   projectTitle: string | null,
-  renderId: string
+  renderId: string,
+  wordTimestamps: Array<{ word: string; start: number; end: number }> = []
 ) {
   const REPLICATE_API_KEY = Deno.env.get('REPLICATE_API_KEY')!;
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -428,52 +429,111 @@ async function processRender(
       }
     }
 
-    // Generate subtitles - split into short 1-2 sentence chunks for readability
+    // Generate subtitles using Whisper word-level timestamps for perfect sync
     let srtContent = '';
     let vttContent = 'WEBVTT\n\n';
     let subtitleIndex = 1;
     
-    scenes.forEach((scene: any) => {
-      const sceneStart = scene.start_time || 0;
-      const sceneEnd = scene.end_time || sceneStart + 5;
-      const sceneDuration = sceneEnd - sceneStart;
+    if (wordTimestamps && wordTimestamps.length > 0) {
+      console.log('[BG] Using Whisper word timestamps for subtitles');
       
-      // Split narration into sentences
-      const sentences = scene.narration.match(/[^.!?]+[.!?]+/g) || [scene.narration];
+      // Group words into subtitle chunks (4-8 words or ~40-80 chars max)
+      const maxWordsPerChunk = 8;
+      const maxCharsPerChunk = 60;
       
-      // Group sentences into 1-2 per subtitle (max ~80 chars per subtitle)
-      const subtitleChunks: string[] = [];
-      let currentChunk = '';
+      let currentWords: typeof wordTimestamps = [];
+      let currentText = '';
       
-      for (const sentence of sentences) {
-        const trimmed = sentence.trim();
-        if (currentChunk.length + trimmed.length > 80 && currentChunk) {
-          subtitleChunks.push(currentChunk.trim());
-          currentChunk = trimmed;
+      for (const wordData of wordTimestamps) {
+        const word = wordData.word.trim();
+        if (!word) continue;
+        
+        const newText = currentText + (currentText ? ' ' : '') + word;
+        
+        // Check if we should start a new chunk
+        if (currentWords.length >= maxWordsPerChunk || newText.length > maxCharsPerChunk) {
+          if (currentWords.length > 0) {
+            // Output current chunk
+            const startTime = currentWords[0].start;
+            const endTime = currentWords[currentWords.length - 1].end;
+            
+            const srtStart = formatSrtTime(startTime);
+            const srtEnd = formatSrtTime(endTime);
+            srtContent += `${subtitleIndex}\n${srtStart} --> ${srtEnd}\n${currentText}\n\n`;
+            
+            const vttStart = formatVttTime(startTime);
+            const vttEnd = formatVttTime(endTime);
+            vttContent += `${vttStart} --> ${vttEnd}\n${currentText}\n\n`;
+            
+            subtitleIndex++;
+          }
+          
+          // Start new chunk with current word
+          currentWords = [wordData];
+          currentText = word;
         } else {
-          currentChunk += (currentChunk ? ' ' : '') + trimmed;
+          currentWords.push(wordData);
+          currentText = newText;
         }
       }
-      if (currentChunk.trim()) subtitleChunks.push(currentChunk.trim());
       
-      // Distribute chunks evenly across scene duration
-      const chunkDuration = subtitleChunks.length > 0 ? sceneDuration / subtitleChunks.length : sceneDuration;
+      // Output final chunk
+      if (currentWords.length > 0) {
+        const startTime = currentWords[0].start;
+        const endTime = currentWords[currentWords.length - 1].end;
+        
+        const srtStart = formatSrtTime(startTime);
+        const srtEnd = formatSrtTime(endTime);
+        srtContent += `${subtitleIndex}\n${srtStart} --> ${srtEnd}\n${currentText}\n\n`;
+        
+        const vttStart = formatVttTime(startTime);
+        const vttEnd = formatVttTime(endTime);
+        vttContent += `${vttStart} --> ${vttEnd}\n${currentText}\n\n`;
+      }
       
-      subtitleChunks.forEach((chunk, i) => {
-        const chunkStart = sceneStart + (i * chunkDuration);
-        const chunkEnd = Math.min(chunkStart + chunkDuration, sceneEnd);
+      console.log(`[BG] Generated ${subtitleIndex} subtitles from word timestamps`);
+    } else {
+      console.log('[BG] No word timestamps, falling back to scene-based subtitles');
+      
+      // Fallback: use scene-based subtitles
+      scenes.forEach((scene: any) => {
+        const sceneStart = scene.start_time || 0;
+        const sceneEnd = scene.end_time || sceneStart + 5;
+        const sceneDuration = sceneEnd - sceneStart;
         
-        const srtStart = formatSrtTime(chunkStart);
-        const srtEnd = formatSrtTime(chunkEnd);
-        srtContent += `${subtitleIndex}\n${srtStart} --> ${srtEnd}\n${chunk}\n\n`;
+        const sentences = scene.narration.match(/[^.!?]+[.!?]+/g) || [scene.narration];
+        const subtitleChunks: string[] = [];
+        let currentChunk = '';
         
-        const vttStart = formatVttTime(chunkStart);
-        const vttEnd = formatVttTime(chunkEnd);
-        vttContent += `${vttStart} --> ${vttEnd}\n${chunk}\n\n`;
+        for (const sentence of sentences) {
+          const trimmed = sentence.trim();
+          if (currentChunk.length + trimmed.length > 80 && currentChunk) {
+            subtitleChunks.push(currentChunk.trim());
+            currentChunk = trimmed;
+          } else {
+            currentChunk += (currentChunk ? ' ' : '') + trimmed;
+          }
+        }
+        if (currentChunk.trim()) subtitleChunks.push(currentChunk.trim());
         
-        subtitleIndex++;
+        const chunkDuration = subtitleChunks.length > 0 ? sceneDuration / subtitleChunks.length : sceneDuration;
+        
+        subtitleChunks.forEach((chunk, i) => {
+          const chunkStart = sceneStart + (i * chunkDuration);
+          const chunkEnd = Math.min(chunkStart + chunkDuration, sceneEnd);
+          
+          const srtStart = formatSrtTime(chunkStart);
+          const srtEnd = formatSrtTime(chunkEnd);
+          srtContent += `${subtitleIndex}\n${srtStart} --> ${srtEnd}\n${chunk}\n\n`;
+          
+          const vttStart = formatVttTime(chunkStart);
+          const vttEnd = formatVttTime(chunkEnd);
+          vttContent += `${vttStart} --> ${vttEnd}\n${chunk}\n\n`;
+          
+          subtitleIndex++;
+        });
       });
-    });
+    }
 
     // Generate viral thumbnail
     let generatedThumbnailUrl: string | null = thumbnailImageUrl || validImages[0] || null;
@@ -631,6 +691,16 @@ serve(async (req) => {
 
     console.log(`Starting render for project ${projectId} with ${scenes.length} scenes`);
 
+    // Fetch word timestamps from project for accurate subtitles
+    const { data: projectData } = await supabase
+      .from('projects')
+      .select('word_timestamps')
+      .eq('id', projectId)
+      .single();
+
+    const wordTimestamps = projectData?.word_timestamps || [];
+    console.log(`Fetched ${wordTimestamps.length} word timestamps for subtitles`);
+
     // Create a render record with "rendering" status
     const { data: renderRecord, error: renderError } = await supabase
       .from('renders')
@@ -652,7 +722,7 @@ serve(async (req) => {
     // Start background processing - this allows the request to return immediately
     // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
     (globalThis as any).EdgeRuntime?.waitUntil?.(
-      processRender(projectId, scenes, audioUrl, audioDuration, thumbnailImageUrl, projectTitle, renderId)
+      processRender(projectId, scenes, audioUrl, audioDuration, thumbnailImageUrl, projectTitle, renderId, wordTimestamps)
     );
 
     // Return immediately with the render ID

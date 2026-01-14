@@ -26,6 +26,7 @@ export type Database = {
           transcript: string | null
           updated_at: string
           user_id: string | null
+          word_timestamps: Json | null
         }
         Insert: {
           audio_duration?: number | null
@@ -38,6 +39,7 @@ export type Database = {
           transcript?: string | null
           updated_at?: string
           user_id?: string | null
+          word_timestamps?: Json | null
         }
         Update: {
           audio_duration?: number | null
@@ -50,6 +52,7 @@ export type Database = {
           transcript?: string | null
           updated_at?: string
           user_id?: string | null
+          word_timestamps?: Json | null
         }
         Relationships: [
           {
