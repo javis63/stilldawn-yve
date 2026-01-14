@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.generate-tts]
 verify_jwt = false
+
+[functions.generate-tts-chunk]
+verify_jwt = false
