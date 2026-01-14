@@ -27,18 +27,60 @@ serve(async (req) => {
     console.log(`Starting transcription for project ${projectId}`);
     console.log(`Audio URL: ${audioUrl}`);
 
-    // Download the audio file
+    // Stream audio directly to Whisper without buffering entire file in memory
+    // This prevents memory limit errors for large audio files
     const audioResponse = await fetch(audioUrl);
     if (!audioResponse.ok) {
-      throw new Error(`Failed to download audio: ${audioResponse.statusText}`);
+      throw new Error(`Failed to fetch audio: ${audioResponse.statusText}`);
+    }
+
+    // Get content length to check file size
+    const contentLength = audioResponse.headers.get('content-length');
+    const fileSizeBytes = contentLength ? parseInt(contentLength, 10) : 0;
+    const fileSizeMB = fileSizeBytes / (1024 * 1024);
+    console.log(`Audio file size: ${fileSizeMB.toFixed(2)} MB`);
+
+    // Whisper API has a 25MB limit
+    if (fileSizeMB > 25) {
+      throw new Error(`Audio file too large (${fileSizeMB.toFixed(1)}MB). Whisper API limit is 25MB. Please compress or shorten the audio.`);
+    }
+
+    // For files within limits, stream to a buffer and send to Whisper
+    const chunks: Uint8Array[] = [];
+    const reader = audioResponse.body?.getReader();
+    if (!reader) {
+      throw new Error('Failed to get audio stream reader');
+    }
+
+    let receivedBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      receivedBytes += value.length;
+      // Log progress every 5MB
+      if (receivedBytes % (5 * 1024 * 1024) < value.length) {
+        console.log(`Downloaded ${(receivedBytes / (1024 * 1024)).toFixed(1)}MB...`);
+      }
+    }
+
+    // Combine chunks
+    const audioData = new Uint8Array(receivedBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      audioData.set(chunk, offset);
+      offset += chunk.length;
     }
     
-    const audioBlob = await audioResponse.blob();
-    console.log(`Downloaded audio file: ${audioBlob.size} bytes`);
+    console.log(`Downloaded audio file: ${receivedBytes} bytes`);
+
+    // Determine file extension from URL
+    const urlPath = new URL(audioUrl).pathname;
+    const fileName = urlPath.split('/').pop() || 'audio.mp3';
 
     // Create form data for Whisper API
     const formData = new FormData();
-    formData.append('file', audioBlob, 'audio.mp3');
+    formData.append('file', new Blob([audioData]), fileName);
     formData.append('model', 'whisper-1');
     formData.append('response_format', 'verbose_json');
     formData.append('timestamp_granularities[]', 'word');
