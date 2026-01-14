@@ -5,31 +5,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const NARRATOR_STYLE = `You are a cinematic action-thriller narrator.
-
-Voice: low, controlled, authoritative. Calm intensity. Neutral American accent.
-
-Delivery: restrained and realistic—never theatrical, never cartoonish.
-
-Pacing:
-- Default: measured, deliberate.
-- Tension: slow slightly; add micro-pauses before reveals.
-- Action: tighten cadence; slightly faster; crisp consonants.
-
-Emotion:
-- Convey danger through emphasis and timing, not volume.
-- No melodrama, no comedy, no "announcer voice."
-
-Pauses:
-- Short pause at commas.
-- Medium pause at sentence ends.
-- Longer pause before scene transitions or critical decisions.
-
-Rules:
-- Read the provided text exactly as written.
-- Do not add sound effects, music cues, or extra words.
-- Do not change wording, even if awkward.`;
-
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
@@ -37,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { text, voice } = await req.json();
+    const { text, voice, speed } = await req.json();
 
     if (!text) {
       throw new Error("Text is required");
@@ -48,9 +23,11 @@ serve(async (req) => {
       throw new Error("OpenAI API key not configured");
     }
 
-    console.log(`Generating TTS for ${text.length} characters with gpt-4o-mini-tts`);
+    console.log(`Generating TTS for ${text.length} characters`);
 
-    // Generate audio using OpenAI's new TTS model with instructions
+    // Generate audio using OpenAI TTS
+    // Note: OpenAI TTS doesn't support instruction prompts - it reads text verbatim
+    // Speed: 0.25 to 4.0, default 1.0. Using 1.1 for slightly faster delivery.
     const response = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: {
@@ -58,10 +35,11 @@ serve(async (req) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini-tts",
+        model: "tts-1-hd",
         voice: voice || "onyx",
-        input: `${NARRATOR_STYLE}\n\n---\n\n${text}`,
+        input: text,
         response_format: "mp3",
+        speed: speed || 1.1, // Slightly faster than default
       }),
     });
 
