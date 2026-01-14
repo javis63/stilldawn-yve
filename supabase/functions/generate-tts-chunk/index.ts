@@ -39,7 +39,7 @@ serve(async (req) => {
         voice: voice || "onyx",
         input: text,
         response_format: "mp3",
-        speed: speed || 1.1, // Slightly faster than default
+        speed: speed || 1.0, // Default speed for smoothest quality
       }),
     });
 
