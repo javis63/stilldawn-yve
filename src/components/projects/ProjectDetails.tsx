@@ -307,7 +307,19 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
 
         const fullTranscript = transcripts.join(" ");
 
-        // Update project in DB (and local state)
+        // Save transcript to database
+        const { error: updateError } = await supabase
+          .from("projects")
+          .update({
+            transcript: fullTranscript,
+            audio_duration: totalDuration || currentProject.audio_duration,
+            status: "processing",
+          })
+          .eq("id", currentProject.id);
+
+        if (updateError) throw updateError;
+
+        // Update local state
         setCurrentProject((prev) => ({
           ...prev,
           transcript: fullTranscript,
@@ -315,7 +327,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           status: "processing" as const,
         }));
 
-        toast.success("Transcription complete!");
+        toast.success(`Transcription complete! Duration: ${Math.round(totalDuration)}s`);
         onRefresh();
         return;
       }
