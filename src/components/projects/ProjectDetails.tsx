@@ -26,6 +26,7 @@ import { formatDistanceToNow } from "date-fns";
 import { SceneCard } from "./SceneCard";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
+import { splitAudioIntoChunks, ChunkingProgress } from "@/utils/audioChunking";
 
 interface ProjectDetailsProps {
   project: Project;
@@ -219,7 +220,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
 
         if (listError) throw listError;
 
-        const chunkFiles = (files || [])
+        let chunkFiles = (files || [])
           .map((f) => f.name)
           .map((name) => {
             const match = name.match(/^chunk_(\d+)\.wav$/);
@@ -228,10 +229,55 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           .filter((x): x is { name: string; index: number } => !!x)
           .sort((a, b) => a.index - b.index);
 
+        // Backward-compat: older projects may have only a single huge audio file.
+        // In that case, we create chunks client-side once, upload them, then proceed.
         if (chunkFiles.length === 0) {
-          throw new Error(
-            "This audio file is too large to process as a single file, and no audio chunks were found for this project. Please re-upload using the new uploader (it will auto-chunk long audio)."
+          toast.info(
+            "This project has a large audio file but no chunks yet. Creating chunks in your browser (one-time step)..."
           );
+
+          const res = await fetch(currentProject.audio_url);
+          if (!res.ok) {
+            throw new Error(`Failed to download audio: ${res.statusText}`);
+          }
+
+          const blob = await res.blob();
+          const fileForChunking = new File([blob], "audio", {
+            type: blob.type || "audio/wav",
+          });
+
+          const { chunks: createdChunks, totalDuration } = await splitAudioIntoChunks(
+            fileForChunking,
+            (p: ChunkingProgress) => {
+              // Keep it light: avoid spamming toasts.
+              if (p.stage === "chunking" && p.currentChunk && p.totalChunks) {
+                setRenderProgress(Math.round((p.currentChunk / p.totalChunks) * 100));
+              }
+            }
+          );
+
+          // Upload chunks
+          for (let i = 0; i < createdChunks.length; i++) {
+            const chunkPath = `${currentProject.id}/chunk_${i}.wav`;
+            const { error: uploadErr } = await supabase.storage
+              .from("audio")
+              .upload(chunkPath, createdChunks[i].blob, {
+                cacheControl: "3600",
+                upsert: true,
+              });
+            if (uploadErr) throw uploadErr;
+          }
+
+          // Persist duration (and keep audio_url as-is)
+          await supabase
+            .from("projects")
+            .update({ audio_duration: totalDuration })
+            .eq("id", currentProject.id);
+
+          chunkFiles = createdChunks.map((_, i) => ({
+            name: `chunk_${i}.wav`,
+            index: i,
+          }));
         }
 
         const transcripts: string[] = [];
