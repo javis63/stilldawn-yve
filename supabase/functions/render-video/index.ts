@@ -297,54 +297,33 @@ async function processRender(
       const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
       const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
 
-      // Build image sequence with proper timing - now supporting custom durations per image
-      // For Ken Burns, we use shorter duration per image with more images to create dynamic movement
+      // Build image sequence - NO REPEATING, each unique image appears once
+      // Replicate slideshow has a max of 50 images
+      const MAX_SLIDESHOW_IMAGES = 50;
       const imagesForSlideshow: string[] = [];
-      const imageDurationsForSlideshow: number[] = [];
-      const KEN_BURNS_CYCLE_DURATION = 8; // Each image gets 8 seconds with Ken Burns effect
       
+      // Collect all unique images from all scenes (no repeating)
       for (const sceneMedia of sortedMedia) {
         if (sceneMedia.type !== 'image' || sceneMedia.urls.length === 0) continue;
         
-        const sceneDuration = sceneMedia.duration;
-        const imagesInScene = sceneMedia.urls;
-        const customDurations = sceneMedia.imageDurations || [];
-        
-        // Calculate default duration (evenly split) for images without custom duration
-        const defaultDuration = sceneDuration / imagesInScene.length;
-        
-        for (let imgIdx = 0; imgIdx < imagesInScene.length; imgIdx++) {
-          const img = imagesInScene[imgIdx];
-          // Use custom duration if set (> 0), otherwise use default
-          const imgDuration = (customDurations[imgIdx] && customDurations[imgIdx] > 0) 
-            ? customDurations[imgIdx] 
-            : defaultDuration;
-          
-          // Add image with potential repeats for Ken Burns cycles
-          const repeats = Math.max(1, Math.ceil(imgDuration / KEN_BURNS_CYCLE_DURATION));
-          const durationPerRepeat = imgDuration / repeats;
-          
-          for (let r = 0; r < repeats; r++) {
+        for (const img of sceneMedia.urls) {
+          // Don't add duplicates, and respect max limit
+          if (!imagesForSlideshow.includes(img) && imagesForSlideshow.length < MAX_SLIDESHOW_IMAGES) {
             imagesForSlideshow.push(img);
-            imageDurationsForSlideshow.push(durationPerRepeat);
           }
         }
       }
 
-      // Ensure minimum images and cap at max (Replicate allows max 50 images)
-      const MAX_SLIDESHOW_IMAGES = 50;
-      while (imagesForSlideshow.length < 2 && allImageUrls[0]) imagesForSlideshow.push(allImageUrls[0]);
-      
-      // If we have too many images, trim from the longest duration sections
-      if (imagesForSlideshow.length > MAX_SLIDESHOW_IMAGES) {
-        console.log(`[BG] Trimming slideshow from ${imagesForSlideshow.length} to ${MAX_SLIDESHOW_IMAGES} images`);
-        imagesForSlideshow.length = MAX_SLIDESHOW_IMAGES;
-        imageDurationsForSlideshow.length = MAX_SLIDESHOW_IMAGES;
+      // Ensure minimum of 2 images (required by slideshow model)
+      while (imagesForSlideshow.length < 2 && allImageUrls[0]) {
+        imagesForSlideshow.push(allImageUrls[0]);
       }
 
-      // Calculate duration per image to match target duration
-      // With max 50 images and potentially long videos, each image may need to be 12+ seconds
-      const durationPerImage = Math.max(3, targetDurationSec / imagesForSlideshow.length);
+      // Calculate duration per image: total video duration / number of images
+      // For a 10-min video with 4 images = 150 seconds per image
+      const durationPerImage = Math.max(3, Math.ceil(targetDurationSec / imagesForSlideshow.length));
+      
+      console.log(`[BG] Unique images: ${imagesForSlideshow.length}, duration per image: ${durationPerImage}s, total target: ${targetDurationSec}s`);
 
       console.log(`[BG] Ken Burns Slideshow: ${imagesForSlideshow.length} frames, ${durationPerImage.toFixed(1)}s each, target: ${targetDurationSec}s`);
 
