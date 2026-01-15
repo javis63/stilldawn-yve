@@ -331,12 +331,20 @@ async function processRender(
         }
       }
 
-      // Ensure minimum images and cap at max
+      // Ensure minimum images and cap at max (Replicate allows max 50 images)
+      const MAX_SLIDESHOW_IMAGES = 50;
       while (imagesForSlideshow.length < 2 && allImageUrls[0]) imagesForSlideshow.push(allImageUrls[0]);
-      if (imagesForSlideshow.length > 100) imagesForSlideshow.length = 100;
+      
+      // If we have too many images, trim from the longest duration sections
+      if (imagesForSlideshow.length > MAX_SLIDESHOW_IMAGES) {
+        console.log(`[BG] Trimming slideshow from ${imagesForSlideshow.length} to ${MAX_SLIDESHOW_IMAGES} images`);
+        imagesForSlideshow.length = MAX_SLIDESHOW_IMAGES;
+        imageDurationsForSlideshow.length = MAX_SLIDESHOW_IMAGES;
+      }
 
       // Calculate duration per image to match target duration
-      const durationPerImage = Math.max(3, Math.min(12, targetDurationSec / imagesForSlideshow.length));
+      // With max 50 images and potentially long videos, each image may need to be 12+ seconds
+      const durationPerImage = Math.max(3, targetDurationSec / imagesForSlideshow.length);
 
       console.log(`[BG] Ken Burns Slideshow: ${imagesForSlideshow.length} frames, ${durationPerImage.toFixed(1)}s each, target: ${targetDurationSec}s`);
 
