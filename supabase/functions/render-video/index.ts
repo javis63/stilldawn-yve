@@ -292,9 +292,8 @@ async function processRender(
         }
       }
     } else if (scenesWithImage.length > 0) {
-      // Only images - create slideshow with Ken Burns effect
+      // Only images - create slideshow
       // Replicate model limits: max 10s per image, max 50 images per call
-      // For longer videos, we generate multiple slideshows and concatenate them
       const MAX_DURATION_PER_IMAGE = 10; // Replicate API limit
       const MAX_SLIDESHOW_IMAGES = 50; // Replicate model limit
       const MAX_SLIDESHOW_DURATION = MAX_DURATION_PER_IMAGE * MAX_SLIDESHOW_IMAGES; // 500s per chunk
@@ -302,49 +301,52 @@ async function processRender(
       const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
       const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
 
-      // Collect all unique images from all scenes
-      const uniqueImages: string[] = [];
+      // Collect ALL images from ALL scenes (preserving order and duplicates for timing)
+      const allSceneImages: string[] = [];
       for (const sceneMedia of sortedMedia) {
         if (sceneMedia.type !== 'image' || sceneMedia.urls.length === 0) continue;
+        // Add all images from this scene
         for (const img of sceneMedia.urls) {
-          if (!uniqueImages.includes(img)) {
-            uniqueImages.push(img);
-          }
+          allSceneImages.push(img);
         }
       }
 
-      // Ensure minimum of 1 unique image
-      if (uniqueImages.length === 0 && allImageUrls[0]) {
-        uniqueImages.push(allImageUrls[0]);
+      console.log(`[BG] Total images collected from scenes: ${allSceneImages.length}`);
+      console.log(`[BG] Images: ${JSON.stringify(allSceneImages.slice(0, 5))}${allSceneImages.length > 5 ? '...' : ''}`);
+
+      // Ensure minimum of 1 image
+      if (allSceneImages.length === 0 && allImageUrls[0]) {
+        allSceneImages.push(allImageUrls[0]);
       }
 
+      // Calculate duration per image based on total images and target duration
+      const totalImages = allSceneImages.length;
+      let durationPerImage = Math.min(MAX_DURATION_PER_IMAGE, Math.max(2, Math.floor(targetDurationSec / totalImages)));
+      
       // Calculate how many slideshow chunks we need
       const chunksNeeded = Math.ceil(targetDurationSec / MAX_SLIDESHOW_DURATION);
-      const durationPerChunk = targetDurationSec / chunksNeeded;
-      const imagesPerChunk = Math.min(MAX_SLIDESHOW_IMAGES, Math.ceil(durationPerChunk / MAX_DURATION_PER_IMAGE));
-      const durationPerImage = Math.min(MAX_DURATION_PER_IMAGE, Math.max(3, Math.ceil(durationPerChunk / imagesPerChunk)));
+      const imagesPerChunk = Math.ceil(totalImages / chunksNeeded);
       
-      console.log(`[BG] Target: ${targetDurationSec}s, chunks needed: ${chunksNeeded}, duration per chunk: ${durationPerChunk.toFixed(1)}s`);
-      console.log(`[BG] Unique images: ${uniqueImages.length}, images per chunk: ${imagesPerChunk}, duration per image: ${durationPerImage}s`);
+      console.log(`[BG] Target: ${targetDurationSec}s, total images: ${totalImages}`);
+      console.log(`[BG] Duration per image: ${durationPerImage}s, chunks needed: ${chunksNeeded}, images per chunk: ${imagesPerChunk}`);
 
       // Generate slideshows for each chunk
       const slideshowUrls: string[] = [];
       
       for (let chunk = 0; chunk < chunksNeeded; chunk++) {
-        // Build image sequence for this chunk by cycling through unique images
-        const chunkImages: string[] = [];
-        const startOffset = chunk * imagesPerChunk;
-        
-        for (let i = 0; i < imagesPerChunk; i++) {
-          chunkImages.push(uniqueImages[(startOffset + i) % uniqueImages.length]);
-        }
+        // Get images for this chunk
+        const startIdx = chunk * imagesPerChunk;
+        const endIdx = Math.min(startIdx + imagesPerChunk, totalImages);
+        const chunkImages = allSceneImages.slice(startIdx, endIdx);
         
         // Ensure minimum of 2 images (required by slideshow model)
-        while (chunkImages.length < 2 && uniqueImages[0]) {
-          chunkImages.push(uniqueImages[chunkImages.length % uniqueImages.length]);
+        while (chunkImages.length < 2 && allSceneImages.length > 0) {
+          // Repeat images if we have fewer than 2
+          chunkImages.push(allSceneImages[chunkImages.length % allSceneImages.length]);
         }
 
         console.log(`[BG] Generating slideshow chunk ${chunk + 1}/${chunksNeeded}: ${chunkImages.length} images, ${durationPerImage}s each`);
+        console.log(`[BG] Chunk ${chunk + 1} images: ${JSON.stringify(chunkImages)}`);
 
         const slideshowOut = await replicate.run(
           "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
@@ -361,12 +363,14 @@ async function processRender(
           }
         );
 
+        console.log(`[BG] Slideshow API response:`, JSON.stringify(slideshowOut));
+
         const chunkUrl = extractUrl(slideshowOut);
         if (chunkUrl) {
           slideshowUrls.push(chunkUrl);
           console.log(`[BG] Chunk ${chunk + 1} complete: ${chunkUrl}`);
         } else {
-          console.error(`[BG] Chunk ${chunk + 1} failed to generate`);
+          console.error(`[BG] Chunk ${chunk + 1} failed to generate, raw output:`, slideshowOut);
         }
       }
 
