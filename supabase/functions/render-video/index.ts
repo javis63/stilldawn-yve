@@ -14,6 +14,7 @@ const corsHeaders = {
 
 const VPS_RENDER_URL = 'http://31.97.147.132:5000/api/lovable-render';
 const VPS_STATUS_URL = 'http://31.97.147.132:5000/api/lovable-render';
+const VPS_API_KEY = Deno.env.get('VPS_API_KEY') || '';
 
 // Helper to poll VPS for render status
 async function pollVpsStatus(jobId: string, maxWaitMs: number = 1800000): Promise<{
@@ -28,7 +29,10 @@ async function pollVpsStatus(jobId: string, maxWaitMs: number = 1800000): Promis
     try {
       const response = await fetch(`${VPS_STATUS_URL}/${jobId}/status`, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${VPS_API_KEY}`,
+        },
       });
       
       if (!response.ok) {
@@ -220,7 +224,10 @@ async function processRender(
     // Call VPS render endpoint
     const vpsResponse = await fetch(VPS_RENDER_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${VPS_API_KEY}`,
+      },
       body: JSON.stringify({
         project_id: projectId,
         render_id: renderId,
