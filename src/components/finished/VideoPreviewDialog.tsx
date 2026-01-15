@@ -45,8 +45,7 @@ export function VideoPreviewDialog({ open, onOpenChange, render, title }: VideoP
 
       // Some browsers don't support addEventListener on TextTrack
       try {
-        // @ts-expect-error - TextTrack event types aren't always present
-        track.addEventListener?.("cuechange", update);
+        track.addEventListener("cuechange", update);
       } catch {
         // ignore
       }
@@ -55,8 +54,7 @@ export function VideoPreviewDialog({ open, onOpenChange, render, title }: VideoP
 
       return () => {
         try {
-          // @ts-expect-error - TextTrack event types aren't always present
-          track.removeEventListener?.("cuechange", update);
+          track.removeEventListener("cuechange", update);
         } catch {
           // ignore
         }
