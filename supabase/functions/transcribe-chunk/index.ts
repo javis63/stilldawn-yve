@@ -6,6 +6,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -41,13 +47,14 @@ serve(async (req) => {
       throw new Error(`Chunk exceeds 25MB limit (${fileSizeMB.toFixed(1)}MB)`);
     }
 
-    // Create form data for Whisper API
+    // Create form data for Whisper API - request word-level timestamps
     const formData = new FormData();
     formData.append('file', new Blob([audioData]), `chunk_${chunkIndex}.wav`);
     formData.append('model', 'whisper-1');
     formData.append('response_format', 'verbose_json');
+    formData.append('timestamp_granularities[]', 'word');
 
-    console.log('Calling Whisper API...');
+    console.log('Calling Whisper API with word timestamps...');
 
     // Call Whisper API
     const whisperResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
@@ -65,12 +72,26 @@ serve(async (req) => {
     }
 
     const transcription = await whisperResponse.json();
-    console.log(`Chunk ${chunkIndex + 1} transcribed: "${transcription.text?.substring(0, 50)}..."`);
+    
+    // Extract word-level timestamps
+    const words: WordTimestamp[] = [];
+    if (transcription.words && Array.isArray(transcription.words)) {
+      for (const w of transcription.words) {
+        words.push({
+          word: w.word || '',
+          start: w.start || 0,
+          end: w.end || 0,
+        });
+      }
+    }
+    
+    console.log(`Chunk ${chunkIndex + 1} transcribed: "${transcription.text?.substring(0, 50)}..." (${words.length} words)`);
 
     return new Response(JSON.stringify({
       success: true,
       text: transcription.text,
       duration: transcription.duration,
+      words: words,
       chunkIndex,
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

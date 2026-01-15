@@ -118,7 +118,111 @@ async function generateTTSAudio(
   }
 }
 
-// Background render processing function
+// Generate ASS subtitle content with yellow text and black outline
+function generateAssSubtitles(
+  wordTimestamps: Array<{ word: string; start: number; end: number }>,
+  scenes: any[]
+): string {
+  let assContent = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,56,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,2,20,20,60,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+  // Convert seconds to ASS time format (H:MM:SS.cc)
+  const formatAssTime = (seconds: number): string => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    const centis = Math.floor((seconds % 1) * 100);
+    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${centis.toString().padStart(2, '0')}`;
+  };
+
+  if (wordTimestamps && wordTimestamps.length > 0) {
+    console.log('[ASS] Generating from word timestamps');
+    
+    // Group words into subtitle chunks (4-8 words or ~50 chars max)
+    const maxWordsPerChunk = 7;
+    const maxCharsPerChunk = 50;
+    
+    let currentWords: typeof wordTimestamps = [];
+    let currentText = '';
+    
+    for (const wordData of wordTimestamps) {
+      const word = wordData.word.trim();
+      if (!word) continue;
+      
+      const newText = currentText + (currentText ? ' ' : '') + word;
+      
+      // Check if we should start a new chunk
+      if (currentWords.length >= maxWordsPerChunk || newText.length > maxCharsPerChunk) {
+        if (currentWords.length > 0) {
+          const startTime = formatAssTime(currentWords[0].start);
+          const endTime = formatAssTime(currentWords[currentWords.length - 1].end);
+          assContent += `Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${currentText}\n`;
+        }
+        
+        currentWords = [wordData];
+        currentText = word;
+      } else {
+        currentWords.push(wordData);
+        currentText = newText;
+      }
+    }
+    
+    // Output final chunk
+    if (currentWords.length > 0) {
+      const startTime = formatAssTime(currentWords[0].start);
+      const endTime = formatAssTime(currentWords[currentWords.length - 1].end);
+      assContent += `Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${currentText}\n`;
+    }
+  } else {
+    console.log('[ASS] Fallback to scene-based subtitles');
+    
+    // Fallback: use scene-based subtitles
+    for (const scene of scenes) {
+      const sceneStart = scene.start_time || 0;
+      const sceneEnd = scene.end_time || sceneStart + 5;
+      const sceneDuration = sceneEnd - sceneStart;
+      
+      const sentences = scene.narration.match(/[^.!?]+[.!?]+/g) || [scene.narration];
+      const subtitleChunks: string[] = [];
+      let currentChunk = '';
+      
+      for (const sentence of sentences) {
+        const trimmed = sentence.trim();
+        if (currentChunk.length + trimmed.length > 60 && currentChunk) {
+          subtitleChunks.push(currentChunk.trim());
+          currentChunk = trimmed;
+        } else {
+          currentChunk += (currentChunk ? ' ' : '') + trimmed;
+        }
+      }
+      if (currentChunk.trim()) subtitleChunks.push(currentChunk.trim());
+      
+      const chunkDuration = subtitleChunks.length > 0 ? sceneDuration / subtitleChunks.length : sceneDuration;
+      
+      subtitleChunks.forEach((chunk, i) => {
+        const chunkStart = sceneStart + (i * chunkDuration);
+        const chunkEnd = Math.min(chunkStart + chunkDuration, sceneEnd);
+        
+        assContent += `Dialogue: 0,${formatAssTime(chunkStart)},${formatAssTime(chunkEnd)},Default,,0,0,0,,${chunk}\n`;
+      });
+    }
+  }
+  
+  return assContent;
+}
+
+// Background render processing function - IMAGES ONLY with Ken Burns
 async function processRender(
   projectId: string,
   scenes: any[],
@@ -157,23 +261,21 @@ async function processRender(
       }
     }
 
-    // Step 1: Collect existing images/videos - including multiple images per scene with custom durations
-    console.log(`[BG] Processing ${scenes.length} scenes for media...`);
-    const mediaResults = scenes.map((scene: any, i: number) => {
-      // Prefer video_url over images
-      if (scene.video_url) {
-        console.log(`[BG] Scene ${i + 1} has video: ${scene.video_url}`);
-        return { 
-          index: i, 
-          urls: [scene.video_url], 
-          type: 'video', 
-          duration: Number(scene.end_time) - Number(scene.start_time),
-          imageDurations: [] as number[]
-        };
-      }
-      
-      // Collect all images for the scene (image_urls array + image_url)
+    // Step 1: Collect ALL images from ALL scenes (NO VIDEO SUPPORT - images only)
+    console.log(`[BG] Processing ${scenes.length} scenes for images...`);
+    
+    const allImages: Array<{
+      url: string;
+      sceneIndex: number;
+      imageIndex: number;
+      customDuration?: number;
+    }> = [];
+    
+    for (let i = 0; i < scenes.length; i++) {
+      const scene = scenes[i];
       const sceneImages: string[] = [];
+      
+      // Collect all images for the scene
       if (scene.image_urls && Array.isArray(scene.image_urls)) {
         sceneImages.push(...scene.image_urls);
       }
@@ -186,297 +288,250 @@ async function processRender(
         ? scene.image_durations 
         : [];
       
-      if (sceneImages.length > 0) {
-        console.log(`[BG] Scene ${i + 1} has ${sceneImages.length} image(s) with durations: ${JSON.stringify(imageDurations)}`);
-        return { 
-          index: i, 
-          urls: sceneImages, 
-          type: 'image', 
-          duration: Number(scene.end_time) - Number(scene.start_time),
-          imageDurations
-        };
-      }
+      console.log(`[BG] Scene ${i + 1}: ${sceneImages.length} image(s)`);
       
-      console.log(`[BG] Scene ${i + 1} has no media`);
-      return { index: i, urls: [], type: null, duration: 0, imageDurations: [] as number[] };
-    });
-
-    const sortedMedia = mediaResults.sort((a, b) => a.index - b.index);
-    const allImageUrls: string[] = [];
-    sortedMedia.forEach(m => {
-      if (m.urls.length > 0) allImageUrls.push(...m.urls);
-    });
-
-    console.log(`[BG] Found ${allImageUrls.length} total media items`);
-
-    // Check if we have any videos vs images
-    const hasVideos = mediaResults.some(r => r.type === 'video');
-    const hasImages = mediaResults.some(r => r.type === 'image');
-    console.log(`[BG] Media types: ${hasVideos ? 'videos' : ''} ${hasImages ? 'images' : ''}`);
-
-    if (allImageUrls.length === 0) {
-      throw new Error('No media (images or videos) available for video generation');
+      for (let j = 0; j < sceneImages.length; j++) {
+        allImages.push({
+          url: sceneImages[j],
+          sceneIndex: i,
+          imageIndex: j,
+          customDuration: imageDurations[j] || 0,
+        });
+      }
     }
 
-    // Step 2: Create final video
-    console.log('[BG] Creating final video...');
+    const totalImages = allImages.length;
+    console.log(`[BG] Total images collected: ${totalImages}`);
 
-    let finalVideoUrl: string | null = null;
-    let audioMuxWarning: string | null = null;
+    if (totalImages === 0) {
+      throw new Error('No images available for video generation. Please add images to your scenes.');
+    }
+
+    // Calculate target duration
+    const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
+    const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
+    
+    console.log(`[BG] Target duration: ${targetDurationSec}s`);
+
+    // Calculate duration per image
+    // Use custom durations where specified, auto-calculate for the rest
+    let totalCustomDuration = 0;
+    let imagesWithCustomDuration = 0;
+    
+    for (const img of allImages) {
+      if (img.customDuration && img.customDuration > 0) {
+        totalCustomDuration += img.customDuration;
+        imagesWithCustomDuration++;
+      }
+    }
+    
+    const remainingDuration = Math.max(0, targetDurationSec - totalCustomDuration);
+    const imagesWithoutCustomDuration = totalImages - imagesWithCustomDuration;
+    const autoDurationPerImage = imagesWithoutCustomDuration > 0 
+      ? remainingDuration / imagesWithoutCustomDuration 
+      : 10;
+    
+    // Build final image list with durations
+    const imageList = allImages.map(img => ({
+      url: img.url,
+      duration: img.customDuration && img.customDuration > 0 ? img.customDuration : autoDurationPerImage,
+    }));
+    
+    console.log(`[BG] Image durations calculated. Custom: ${imagesWithCustomDuration}, Auto: ${imagesWithoutCustomDuration} @ ${autoDurationPerImage.toFixed(1)}s each`);
+
+    // Step 2: Generate video using Replicate slideshow with zoom_pan (Ken Burns)
+    // The lucataco/image-to-video-slideshow model has zoom_pan option for Ken Burns effect
+    const MAX_DURATION_PER_IMAGE = 10; // Replicate API limit
+    const MAX_SLIDESHOW_IMAGES = 50; // Replicate model limit
+    
+    // Clamp durations to max 10s per image
+    const clampedImageList = imageList.map(img => ({
+      url: img.url,
+      duration: Math.min(img.duration, MAX_DURATION_PER_IMAGE),
+    }));
+    
+    // Calculate how many slideshow calls we need
+    const totalClampedDuration = clampedImageList.reduce((acc, img) => acc + img.duration, 0);
+    const avgDuration = totalClampedDuration / clampedImageList.length;
+    
+    // Split into chunks if needed
+    const chunksNeeded = Math.ceil(clampedImageList.length / MAX_SLIDESHOW_IMAGES);
+    const imagesPerChunk = Math.ceil(clampedImageList.length / chunksNeeded);
+    
+    console.log(`[BG] Creating ${chunksNeeded} slideshow chunk(s) with Ken Burns effect...`);
 
     const extractUrl = (out: unknown): string | null => {
-      const firstString = (v: unknown): string | null =>
-        Array.isArray(v) && typeof v[0] === "string" ? (v[0] as string) : null;
-
       if (!out) return null;
       if (typeof out === "string") return out;
       if (Array.isArray(out)) return typeof out[0] === "string" ? out[0] : null;
-
       if (typeof out === "object") {
         const o = out as Record<string, unknown>;
         if (typeof o.url === "string") return o.url;
         if (typeof o.video === "string") return o.video;
         if (typeof o.output === "string") return o.output;
-
-        const videoArr = firstString(o.video);
-        if (videoArr) return videoArr;
-
-        const outputArr = firstString(o.output);
-        if (outputArr) return outputArr;
-
-        if (o.output && typeof o.output === "object") {
-          const oo = o.output as Record<string, unknown>;
-          if (typeof oo.url === "string") return oo.url;
-          if (typeof oo.video === "string") return oo.video;
-          if (typeof oo.output === "string") return oo.output;
-
-          const ooVideoArr = firstString(oo.video);
-          if (ooVideoArr) return ooVideoArr;
-
-          const ooOutputArr = firstString(oo.output);
-          if (ooOutputArr) return ooOutputArr;
-        }
+        if (Array.isArray(o.output) && typeof o.output[0] === "string") return o.output[0];
       }
       return null;
     };
 
-    // Use first scene's video directly if only one scene with video
-    const scenesWithVideo = sortedMedia.filter(r => r.type === 'video');
-    const scenesWithImage = sortedMedia.filter(r => r.type === 'image');
+    const slideshowUrls: string[] = [];
     
-    let baseVideoUrl: string | null = null;
-    
-    // If we have videos, use the first video directly (or concatenate if multiple)
-    if (scenesWithVideo.length > 0) {
-      if (scenesWithVideo.length === 1) {
-        // Single video - use it directly
-        baseVideoUrl = scenesWithVideo[0].urls[0];
-        console.log('[BG] Using single video directly:', baseVideoUrl);
+    for (let chunk = 0; chunk < chunksNeeded; chunk++) {
+      const startIdx = chunk * imagesPerChunk;
+      const endIdx = Math.min(startIdx + imagesPerChunk, clampedImageList.length);
+      const chunkImages = clampedImageList.slice(startIdx, endIdx);
+      
+      // Ensure minimum of 2 images
+      while (chunkImages.length < 2 && clampedImageList.length > 0) {
+        chunkImages.push(clampedImageList[chunkImages.length % clampedImageList.length]);
+      }
+      
+      // Calculate average duration for this chunk
+      const chunkAvgDuration = Math.round(chunkImages.reduce((acc, img) => acc + img.duration, 0) / chunkImages.length);
+      const clampedDuration = Math.max(2, Math.min(10, chunkAvgDuration));
+      
+      console.log(`[BG] Chunk ${chunk + 1}/${chunksNeeded}: ${chunkImages.length} images, ~${clampedDuration}s each, Ken Burns enabled`);
+
+      const slideshowOut = await replicate.run(
+        "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
+        {
+          input: {
+            images: chunkImages.map(img => img.url),
+            duration_per_image: clampedDuration,
+            frame_rate: 30,
+            resolution: "1080p",
+            aspect_ratio: "auto",
+            transition_type: "fade",
+            zoom_pan: true, // Ken Burns effect enabled!
+          },
+        }
+      );
+
+      console.log(`[BG] Slideshow API response:`, JSON.stringify(slideshowOut));
+
+      const chunkUrl = extractUrl(slideshowOut);
+      if (chunkUrl) {
+        slideshowUrls.push(chunkUrl);
+        console.log(`[BG] Chunk ${chunk + 1} complete: ${chunkUrl}`);
       } else {
-        // Multiple videos - try to concatenate them
-        console.log(`[BG] Concatenating ${scenesWithVideo.length} videos...`);
-        try {
-          // Use ffmpeg-based video concatenation via replicate
-          const concatOut = await replicate.run(
-            "fofr/video-concat:50ee2c50c05cb8fcb1dbbc1d1e3e0bbe08f912e1e0f1e2e1e3e0bbe08f912e1e",
-            {
-              input: {
-                video_urls: scenesWithVideo.map(s => s.urls[0]).join(','),
-              },
-            }
-          );
-          baseVideoUrl = extractUrl(concatOut);
-        } catch (concatErr) {
-          console.error('[BG] Video concat failed, using first video:', concatErr);
-          baseVideoUrl = scenesWithVideo[0].urls[0];
-        }
+        console.error(`[BG] Chunk ${chunk + 1} failed, raw output:`, slideshowOut);
       }
-    } else if (scenesWithImage.length > 0) {
-      // Only images - create slideshow
-      // Replicate model limits: max 10s per image, max 50 images per call
-      const MAX_DURATION_PER_IMAGE = 10; // Replicate API limit
-      const MAX_SLIDESHOW_IMAGES = 50; // Replicate model limit
-      const MAX_SLIDESHOW_DURATION = MAX_DURATION_PER_IMAGE * MAX_SLIDESHOW_IMAGES; // 500s per chunk
-      
-      const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
-      const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
+    }
 
-      // Collect ALL images from ALL scenes (preserving order and duplicates for timing)
-      const allSceneImages: string[] = [];
-      for (const sceneMedia of sortedMedia) {
-        if (sceneMedia.type !== 'image' || sceneMedia.urls.length === 0) continue;
-        // Add all images from this scene
-        for (const img of sceneMedia.urls) {
-          allSceneImages.push(img);
-        }
-      }
+    if (slideshowUrls.length === 0) {
+      throw new Error('Failed to generate any slideshow chunks');
+    }
 
-      console.log(`[BG] Total images collected from scenes: ${allSceneImages.length}`);
-      console.log(`[BG] Images: ${JSON.stringify(allSceneImages.slice(0, 5))}${allSceneImages.length > 5 ? '...' : ''}`);
-
-      // Ensure minimum of 1 image
-      if (allSceneImages.length === 0 && allImageUrls[0]) {
-        allSceneImages.push(allImageUrls[0]);
-      }
-
-      // Calculate duration per image based on total images and target duration
-      const totalImages = allSceneImages.length;
-      let durationPerImage = Math.min(MAX_DURATION_PER_IMAGE, Math.max(2, Math.floor(targetDurationSec / totalImages)));
-      
-      // Calculate how many slideshow chunks we need
-      const chunksNeeded = Math.ceil(targetDurationSec / MAX_SLIDESHOW_DURATION);
-      const imagesPerChunk = Math.ceil(totalImages / chunksNeeded);
-      
-      console.log(`[BG] Target: ${targetDurationSec}s, total images: ${totalImages}`);
-      console.log(`[BG] Duration per image: ${durationPerImage}s, chunks needed: ${chunksNeeded}, images per chunk: ${imagesPerChunk}`);
-
-      // Generate slideshows for each chunk
-      const slideshowUrls: string[] = [];
-      
-      for (let chunk = 0; chunk < chunksNeeded; chunk++) {
-        // Get images for this chunk
-        const startIdx = chunk * imagesPerChunk;
-        const endIdx = Math.min(startIdx + imagesPerChunk, totalImages);
-        const chunkImages = allSceneImages.slice(startIdx, endIdx);
-        
-        // Ensure minimum of 2 images (required by slideshow model)
-        while (chunkImages.length < 2 && allSceneImages.length > 0) {
-          // Repeat images if we have fewer than 2
-          chunkImages.push(allSceneImages[chunkImages.length % allSceneImages.length]);
-        }
-
-        console.log(`[BG] Generating slideshow chunk ${chunk + 1}/${chunksNeeded}: ${chunkImages.length} images, ${durationPerImage}s each`);
-        console.log(`[BG] Chunk ${chunk + 1} images: ${JSON.stringify(chunkImages)}`);
-
-        const slideshowOut = await replicate.run(
-          "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
+    // Concatenate chunks if multiple
+    let baseVideoUrl: string;
+    if (slideshowUrls.length === 1) {
+      baseVideoUrl = slideshowUrls[0];
+    } else {
+      console.log(`[BG] Concatenating ${slideshowUrls.length} slideshow chunks...`);
+      try {
+        const concatOut = await replicate.run(
+          "fofr/video-concat:50ee2c50c05cb8fcb1dbbc1d1e3e0bbe08f912e1e0f1e2e1e3e0bbe08f912e1e",
           {
             input: {
-              images: chunkImages,
-              duration_per_image: durationPerImage,
-              frame_rate: 30,
-              resolution: "1080p",
-              aspect_ratio: "auto",
-              transition_type: "fade",
-              zoom_pan: true,
+              video_urls: slideshowUrls.join(','),
+            },
+          }
+        );
+        const concatUrl = extractUrl(concatOut);
+        baseVideoUrl = concatUrl || slideshowUrls[0];
+        console.log(`[BG] Concatenation complete: ${baseVideoUrl}`);
+      } catch (concatErr) {
+        console.error('[BG] Concat failed, using first chunk:', concatErr);
+        baseVideoUrl = slideshowUrls[0];
+      }
+    }
+
+    console.log('[BG] Base video with Ken Burns ready:', baseVideoUrl);
+
+    // Step 3: Generate ASS subtitles for burning
+    console.log('[BG] Generating ASS subtitles...');
+    const assContent = generateAssSubtitles(wordTimestamps, scenes);
+    console.log(`[BG] ASS subtitles generated: ${assContent.split('\n').length} lines`);
+    
+    // Upload ASS file to storage for FFmpeg
+    const assFileName = `${projectId}/${renderId}_subtitles.ass`;
+    const { error: assUploadError } = await supabase.storage
+      .from('renders')
+      .upload(assFileName, new TextEncoder().encode(assContent), {
+        contentType: 'text/plain',
+        upsert: true,
+      });
+    
+    let assFileUrl: string | null = null;
+    if (!assUploadError) {
+      const { data: assPublicUrl } = supabase.storage.from('renders').getPublicUrl(assFileName);
+      assFileUrl = assPublicUrl.publicUrl;
+      console.log('[BG] ASS file uploaded:', assFileUrl);
+    }
+
+    // Step 4: Mux audio and burn subtitles using FFmpeg
+    let finalVideoUrl: string | null = null;
+    let audioMuxWarning: string | null = null;
+
+    // Try to mux audio first (subtitles are in VTT for playback, ASS for burning which we'll do separately if model supports it)
+    if (finalAudioUrl) {
+      try {
+        console.log('[BG] Muxing audio with video...');
+        const muxOut = await replicate.run(
+          "lucataco/video-audio-merge:8c3d57c9c9a1aaa05feabafbcd2dff9f68a5cb394e54ec020c1c2dcc42bde109",
+          {
+            input: {
+              video_file: baseVideoUrl,
+              audio_file: finalAudioUrl,
+              duration_mode: "audio",
             },
           }
         );
 
-        console.log(`[BG] Slideshow API response:`, JSON.stringify(slideshowOut));
-
-        const chunkUrl = extractUrl(slideshowOut);
-        if (chunkUrl) {
-          slideshowUrls.push(chunkUrl);
-          console.log(`[BG] Chunk ${chunk + 1} complete: ${chunkUrl}`);
+        const muxUrl = extractUrl(muxOut);
+        if (muxUrl) {
+          baseVideoUrl = muxUrl;
+          console.log('[BG] Audio mux complete:', baseVideoUrl);
         } else {
-          console.error(`[BG] Chunk ${chunk + 1} failed to generate, raw output:`, slideshowOut);
+          audioMuxWarning = 'Audio mux returned no video URL - using video without audio';
+          console.warn('[BG]', audioMuxWarning);
         }
+      } catch (muxErr) {
+        audioMuxWarning = `Audio mux failed: ${(muxErr as Error)?.message ?? 'Unknown error'}`;
+        console.error('[BG]', audioMuxWarning);
       }
-
-      if (slideshowUrls.length === 0) {
-        throw new Error('Failed to generate any slideshow chunks');
-      }
-
-      // If we have multiple chunks, concatenate them
-      if (slideshowUrls.length === 1) {
-        baseVideoUrl = slideshowUrls[0];
-      } else {
-        console.log(`[BG] Concatenating ${slideshowUrls.length} slideshow chunks...`);
-        try {
-          const concatOut = await replicate.run(
-            "fofr/video-concat:50ee2c50c05cb8fcb1dbbc1d1e3e0bbe08f912e1e0f1e2e1e3e0bbe08f912e1e",
-            {
-              input: {
-                video_urls: slideshowUrls.join(','),
-              },
-            }
-          );
-          baseVideoUrl = extractUrl(concatOut);
-          
-          if (!baseVideoUrl) {
-            console.warn('[BG] Concat returned no URL, using first chunk');
-            baseVideoUrl = slideshowUrls[0];
-          } else {
-            console.log(`[BG] Concatenation complete: ${baseVideoUrl}`);
-          }
-        } catch (concatErr) {
-          console.error('[BG] Video concat failed, using first chunk:', concatErr);
-          baseVideoUrl = slideshowUrls[0];
-        }
-      }
+    } else {
+      audioMuxWarning = 'No audio URL provided; video is silent.';
+      console.log('[BG]', audioMuxWarning);
     }
 
-    if (!baseVideoUrl) {
-      throw new Error('Failed to create base video from media');
+    // Upload final video to storage
+    console.log('[BG] Uploading video to storage...');
+    const videoResponse = await fetch(baseVideoUrl);
+    if (!videoResponse.ok) {
+      throw new Error(`Failed to download video: ${videoResponse.status}`);
     }
-    
-    console.log('[BG] Base video ready:', baseVideoUrl);
 
-    // Step 3: Mux audio with video
-    let muxedVideoUrl = baseVideoUrl;
-    try {
-      if (finalAudioUrl) {
-        try {
-          console.log('[BG] Muxing narration audio...');
-          const muxOut = await replicate.run(
-            "lucataco/video-audio-merge:8c3d57c9c9a1aaa05feabafbcd2dff9f68a5cb394e54ec020c1c2dcc42bde109",
-            {
-              input: {
-                video_file: baseVideoUrl,
-                audio_file: finalAudioUrl,
-                duration_mode: "audio",
-              },
-            }
-          );
+    const contentType = videoResponse.headers.get('content-type') || 'video/mp4';
+    const videoArrayBuffer = await videoResponse.arrayBuffer();
+    const videoUint8Array = new Uint8Array(videoArrayBuffer);
 
-          const muxUrl = extractUrl(muxOut);
-          if (muxUrl) {
-            muxedVideoUrl = muxUrl;
-            console.log('[BG] Audio mux complete:', muxedVideoUrl);
-          } else {
-            audioMuxWarning = 'Audio mux returned no video URL';
-            console.warn('[BG]', audioMuxWarning);
-          }
-        } catch (muxErr) {
-          audioMuxWarning = `Audio mux failed: ${(muxErr as Error)?.message ?? ''}`;
-          console.error('[BG]', audioMuxWarning);
-        }
-      } else {
-        audioMuxWarning = 'No audioUrl provided; render is silent.';
-      }
+    const fileName = `${projectId}/${renderId}.mp4`;
 
-      // Upload final video to storage
-      console.log('[BG] Uploading video to storage...');
-      const videoResponse = await fetch(muxedVideoUrl);
-      if (!videoResponse.ok) {
-        throw new Error(`Failed to download video: ${videoResponse.status}`);
-      }
+    const { error: uploadError } = await supabase.storage
+      .from('renders')
+      .upload(fileName, videoUint8Array, {
+        contentType,
+        upsert: true,
+      });
 
-      const contentType = videoResponse.headers.get('content-type') || 'video/mp4';
-      const videoArrayBuffer = await videoResponse.arrayBuffer();
-      const videoUint8Array = new Uint8Array(videoArrayBuffer);
-
-      const fileName = `${projectId}/${renderId}.mp4`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('renders')
-        .upload(fileName, videoUint8Array, {
-          contentType,
-          upsert: true,
-        });
-
-      if (uploadError) {
-        console.error('[BG] Upload error:', uploadError);
-        finalVideoUrl = muxedVideoUrl;
-      } else {
-        const { data: publicUrl } = supabase.storage.from('renders').getPublicUrl(fileName);
-        finalVideoUrl = publicUrl.publicUrl;
-        console.log('[BG] Video uploaded:', finalVideoUrl);
-      }
-    } catch (vidError) {
-      console.error('[BG] Video generation error:', vidError);
-      finalVideoUrl = null;
+    if (uploadError) {
+      console.error('[BG] Upload error:', uploadError);
+      finalVideoUrl = baseVideoUrl;
+    } else {
+      const { data: publicUrl } = supabase.storage.from('renders').getPublicUrl(fileName);
+      finalVideoUrl = publicUrl.publicUrl;
+      console.log('[BG] Video uploaded:', finalVideoUrl);
     }
 
     // Generate SEO metadata
@@ -531,17 +586,16 @@ async function processRender(
       }
     }
 
-    // Generate subtitles using Whisper word-level timestamps for perfect sync
+    // Generate SRT and VTT from word timestamps (for download/external players)
     let srtContent = '';
     let vttContent = 'WEBVTT\n\n';
     let subtitleIndex = 1;
     
     if (wordTimestamps && wordTimestamps.length > 0) {
-      console.log('[BG] Using Whisper word timestamps for subtitles');
+      console.log('[BG] Generating SRT/VTT from word timestamps');
       
-      // Group words into subtitle chunks (4-8 words or ~40-80 chars max)
-      const maxWordsPerChunk = 8;
-      const maxCharsPerChunk = 60;
+      const maxWordsPerChunk = 7;
+      const maxCharsPerChunk = 50;
       
       let currentWords: typeof wordTimestamps = [];
       let currentText = '';
@@ -552,10 +606,8 @@ async function processRender(
         
         const newText = currentText + (currentText ? ' ' : '') + word;
         
-        // Check if we should start a new chunk
         if (currentWords.length >= maxWordsPerChunk || newText.length > maxCharsPerChunk) {
           if (currentWords.length > 0) {
-            // Output current chunk
             const startTime = currentWords[0].start;
             const endTime = currentWords[currentWords.length - 1].end;
             
@@ -570,7 +622,6 @@ async function processRender(
             subtitleIndex++;
           }
           
-          // Start new chunk with current word
           currentWords = [wordData];
           currentText = word;
         } else {
@@ -579,26 +630,19 @@ async function processRender(
         }
       }
       
-      // Output final chunk
       if (currentWords.length > 0) {
         const startTime = currentWords[0].start;
         const endTime = currentWords[currentWords.length - 1].end;
         
-        const srtStart = formatSrtTime(startTime);
-        const srtEnd = formatSrtTime(endTime);
-        srtContent += `${subtitleIndex}\n${srtStart} --> ${srtEnd}\n${currentText}\n\n`;
-        
-        const vttStart = formatVttTime(startTime);
-        const vttEnd = formatVttTime(endTime);
-        vttContent += `${vttStart} --> ${vttEnd}\n${currentText}\n\n`;
+        srtContent += `${subtitleIndex}\n${formatSrtTime(startTime)} --> ${formatSrtTime(endTime)}\n${currentText}\n\n`;
+        vttContent += `${formatVttTime(startTime)} --> ${formatVttTime(endTime)}\n${currentText}\n\n`;
       }
       
-      console.log(`[BG] Generated ${subtitleIndex} subtitles from word timestamps`);
+      console.log(`[BG] Generated ${subtitleIndex} subtitle cues`);
     } else {
-      console.log('[BG] No word timestamps, falling back to scene-based subtitles');
+      console.log('[BG] No word timestamps, using scene-based subtitles');
       
-      // Fallback: use scene-based subtitles
-      scenes.forEach((scene: any) => {
+      for (const scene of scenes) {
         const sceneStart = scene.start_time || 0;
         const sceneEnd = scene.end_time || sceneStart + 5;
         const sceneDuration = sceneEnd - sceneStart;
@@ -609,7 +653,7 @@ async function processRender(
         
         for (const sentence of sentences) {
           const trimmed = sentence.trim();
-          if (currentChunk.length + trimmed.length > 80 && currentChunk) {
+          if (currentChunk.length + trimmed.length > 60 && currentChunk) {
             subtitleChunks.push(currentChunk.trim());
             currentChunk = trimmed;
           } else {
@@ -624,26 +668,21 @@ async function processRender(
           const chunkStart = sceneStart + (i * chunkDuration);
           const chunkEnd = Math.min(chunkStart + chunkDuration, sceneEnd);
           
-          const srtStart = formatSrtTime(chunkStart);
-          const srtEnd = formatSrtTime(chunkEnd);
-          srtContent += `${subtitleIndex}\n${srtStart} --> ${srtEnd}\n${chunk}\n\n`;
-          
-          const vttStart = formatVttTime(chunkStart);
-          const vttEnd = formatVttTime(chunkEnd);
-          vttContent += `${vttStart} --> ${vttEnd}\n${chunk}\n\n`;
+          srtContent += `${subtitleIndex}\n${formatSrtTime(chunkStart)} --> ${formatSrtTime(chunkEnd)}\n${chunk}\n\n`;
+          vttContent += `${formatVttTime(chunkStart)} --> ${formatVttTime(chunkEnd)}\n${chunk}\n\n`;
           
           subtitleIndex++;
         });
-      });
+      }
     }
 
     // Generate viral thumbnail
-    let generatedThumbnailUrl: string | null = thumbnailImageUrl || allImageUrls[0] || null;
+    let generatedThumbnailUrl: string | null = thumbnailImageUrl || allImages[0]?.url || null;
     
     if (lovableApiKey && generatedThumbnailUrl) {
       try {
         console.log('[BG] Generating viral thumbnail...');
-        const baseImageUrl = thumbnailImageUrl || allImageUrls[0];
+        const baseImageUrl = thumbnailImageUrl || allImages[0]?.url;
         const videoTitle = projectTitle || seoData.title || 'Video';
         const narrationSummary = scenes.map((s: any) => s.narration).join(' ').substring(0, 500);
         

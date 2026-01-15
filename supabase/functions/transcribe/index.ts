@@ -12,6 +12,18 @@ const WHISPER_MAX_SIZE = 25 * 1024 * 1024;
 // Split audio into 10-minute chunks for processing (keeps each chunk under 25MB)
 const CHUNK_DURATION_SECONDS = 600;
 
+interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+}
+
+interface TranscriptionResult {
+  text: string;
+  duration?: number;
+  words: WordTimestamp[];
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -79,6 +91,7 @@ serve(async (req) => {
 
     let transcriptionText: string;
     let audioDuration: number | undefined;
+    let wordTimestamps: WordTimestamp[] = [];
 
     // Check if file exceeds Whisper limit
     if (receivedBytes > WHISPER_MAX_SIZE) {
@@ -88,14 +101,17 @@ serve(async (req) => {
       const result = await transcribeInChunks(audioData, fileName, openaiApiKey);
       transcriptionText = result.text;
       audioDuration = result.duration;
+      wordTimestamps = result.words;
     } else {
       // File is within limits, transcribe directly
       const result = await transcribeAudio(audioData, fileName, openaiApiKey);
       transcriptionText = result.text;
       audioDuration = result.duration;
+      wordTimestamps = result.words;
     }
 
     console.log('Transcription complete:', transcriptionText?.substring(0, 100) + '...');
+    console.log(`Captured ${wordTimestamps.length} word timestamps`);
 
     // Update project in database
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -107,6 +123,7 @@ serve(async (req) => {
       .update({
         transcript: transcriptionText,
         audio_duration: audioDuration,
+        word_timestamps: wordTimestamps,
         status: 'processing',
       })
       .eq('id', projectId);
@@ -116,12 +133,13 @@ serve(async (req) => {
       throw new Error(`Failed to update project: ${updateError.message}`);
     }
 
-    console.log('Project updated successfully');
+    console.log('Project updated successfully with word timestamps');
 
     return new Response(JSON.stringify({
       success: true,
       transcript: transcriptionText,
       duration: audioDuration,
+      wordCount: wordTimestamps.length,
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
@@ -139,16 +157,17 @@ serve(async (req) => {
   }
 });
 
-// Transcribe a single audio buffer
+// Transcribe a single audio buffer - now returns word timestamps
 async function transcribeAudio(
   audioData: Uint8Array<ArrayBuffer>, 
   fileName: string, 
   apiKey: string
-): Promise<{ text: string; duration?: number }> {
+): Promise<TranscriptionResult> {
   const formData = new FormData();
   formData.append('file', new Blob([audioData]), fileName);
   formData.append('model', 'whisper-1');
   formData.append('response_format', 'verbose_json');
+  formData.append('timestamp_granularities[]', 'word');
 
   console.log(`Calling Whisper API for ${fileName}...`);
 
@@ -167,18 +186,34 @@ async function transcribeAudio(
   }
 
   const result = await whisperResponse.json();
+  
+  // Extract word-level timestamps from Whisper response
+  const words: WordTimestamp[] = [];
+  if (result.words && Array.isArray(result.words)) {
+    for (const w of result.words) {
+      words.push({
+        word: w.word || '',
+        start: w.start || 0,
+        end: w.end || 0,
+      });
+    }
+  }
+  
+  console.log(`Whisper returned ${words.length} word timestamps`);
+  
   return {
     text: result.text,
-    duration: result.duration
+    duration: result.duration,
+    words,
   };
 }
 
-// Transcribe large audio by splitting into chunks
+// Transcribe large audio by splitting into chunks - aggregates word timestamps
 async function transcribeInChunks(
   audioData: Uint8Array,
   fileName: string,
   apiKey: string
-): Promise<{ text: string; duration: number }> {
+): Promise<TranscriptionResult> {
   // Parse WAV header to get audio properties
   const view = new DataView(audioData.buffer, audioData.byteOffset, audioData.byteLength);
   
@@ -218,13 +253,16 @@ async function transcribeInChunks(
   console.log(`Splitting into ${numChunks} chunks of ${CHUNK_DURATION_SECONDS / 60} minutes each`);
 
   const transcripts: string[] = [];
+  const allWords: WordTimestamp[] = [];
+  let timeOffset = 0;
 
   for (let i = 0; i < numChunks; i++) {
     const chunkStart = i * chunkSizeBytes;
     const chunkEnd = Math.min((i + 1) * chunkSizeBytes, dataSize);
     const chunkDataSize = chunkEnd - chunkStart;
+    const chunkDurationSec = chunkDataSize / bytesPerSecond;
 
-    console.log(`Processing chunk ${i + 1}/${numChunks}...`);
+    console.log(`Processing chunk ${i + 1}/${numChunks} (offset: ${timeOffset.toFixed(1)}s)...`);
 
     // Create a new WAV file for this chunk
     const chunkHeaderSize = dataOffset;
@@ -261,14 +299,30 @@ async function transcribeInChunks(
     );
 
     transcripts.push(chunkResult.text);
-    console.log(`Chunk ${i + 1}/${numChunks} transcribed: "${chunkResult.text.substring(0, 50)}..."`);
+    
+    // Adjust word timestamps by adding the time offset for this chunk
+    for (const word of chunkResult.words) {
+      allWords.push({
+        word: word.word,
+        start: word.start + timeOffset,
+        end: word.end + timeOffset,
+      });
+    }
+    
+    console.log(`Chunk ${i + 1}/${numChunks} transcribed: "${chunkResult.text.substring(0, 50)}..." (${chunkResult.words.length} words)`);
+    
+    // Update time offset for next chunk
+    timeOffset += chunkDurationSec;
   }
 
   // Combine all transcripts
   const combinedText = transcripts.join(' ');
   
+  console.log(`Total words captured: ${allWords.length}`);
+  
   return {
     text: combinedText,
-    duration: totalDuration
+    duration: totalDuration,
+    words: allWords,
   };
 }
