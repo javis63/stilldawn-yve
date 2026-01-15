@@ -416,7 +416,7 @@ async function processRender(
         try {
           console.log('[BG] Muxing narration audio...');
           const muxOut = await replicate.run(
-            "lucataco/video-audio-merge",
+            "lucataco/video-audio-merge:8c3d57c9c9a1aaa05feabafbcd2dff9f68a5cb394e54ec020c1c2dcc42bde109",
             {
               input: {
                 video_file: baseVideoUrl,
