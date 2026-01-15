@@ -86,12 +86,25 @@ export function VideoPreviewDialog({ open, onOpenChange, render, title }: VideoP
               </video>
 
               {caption ? (
-                <div className="pointer-events-none absolute bottom-3 left-1/2 w-[min(92%,_920px)] -translate-x-1/2 text-center">
-                  <div className="inline-block rounded-md bg-background/30 px-3 py-2 backdrop-blur-sm">
-                    <p className="text-caption caption-outline text-base md:text-lg leading-snug whitespace-pre-wrap">
-                      {caption}
-                    </p>
-                  </div>
+                <div className="pointer-events-none absolute bottom-8 left-1/2 w-[min(92%,_920px)] -translate-x-1/2 text-center">
+                  <p 
+                    className="inline-block text-lg md:text-xl lg:text-2xl font-bold leading-snug whitespace-pre-wrap px-4 py-2"
+                    style={{
+                      color: 'hsl(48, 100%, 55%)',
+                      textShadow: `
+                        -2px -2px 0 #000,
+                        2px -2px 0 #000,
+                        -2px 2px 0 #000,
+                        2px 2px 0 #000,
+                        -3px 0 0 #000,
+                        3px 0 0 #000,
+                        0 -3px 0 #000,
+                        0 3px 0 #000
+                      `,
+                    }}
+                  >
+                    {caption}
+                  </p>
                 </div>
               ) : null}
             </div>

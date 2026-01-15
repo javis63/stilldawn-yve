@@ -418,6 +418,19 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
       // Find the thumbnail scene image URL if selected
       const thumbnailScene = thumbnailSceneId ? scenes.find(s => s.id === thumbnailSceneId) : null;
       
+      // Parse word timestamps if available
+      let wordTimestamps: Array<{ word: string; start: number; end: number }> = [];
+      try {
+        const rawTimestamps = (currentProject as any).word_timestamps;
+        if (rawTimestamps) {
+          wordTimestamps = typeof rawTimestamps === 'string' 
+            ? JSON.parse(rawTimestamps) 
+            : rawTimestamps;
+        }
+      } catch (e) {
+        console.warn('Failed to parse word timestamps:', e);
+      }
+
       const { data, error } = await supabase.functions.invoke('render-video', {
         body: {
           projectId: currentProject.id,
@@ -438,6 +451,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           audioDuration: currentProject.audio_duration,
           thumbnailImageUrl: thumbnailScene?.image_url || null,
           projectTitle: currentProject.title,
+          wordTimestamps,
         },
       });
 
