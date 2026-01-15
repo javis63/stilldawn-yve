@@ -210,7 +210,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   return assContent;
 }
 
-// Build FFmpeg command for Ken Burns slideshow with subtitles
+// Build FFmpeg command for Ken Burns slideshow with (optional) burned-in ASS subtitles
 function buildFfmpegCommand(
   imageUrls: string[],
   durations: number[],
@@ -219,91 +219,71 @@ function buildFfmpegCommand(
   fps: number = 30
 ): string {
   const totalImages = imageUrls.length;
-  
-  // Build input section - download images and audio via URLs
+
+  // Inputs: images (looped) + optional audio. Subtitles are referenced by URL in the filter.
   let inputSection = '';
-  let inputIndex = 0;
-  
-  // Add each image as an input with loop
   for (let i = 0; i < totalImages; i++) {
     const duration = durations[i];
     inputSection += `-loop 1 -t ${duration} -i "${imageUrls[i]}" `;
-    inputIndex++;
   }
-  
-  // Add audio if available
-  const audioInputIndex = audioUrl ? inputIndex : -1;
+
+  const audioInputIndex = audioUrl ? totalImages : -1;
   if (audioUrl) {
     inputSection += `-i "${audioUrl}" `;
-    inputIndex++;
   }
-  
-  // Add ASS subtitles if available
-  const assInputIndex = assUrl ? inputIndex : -1;
-  if (assUrl) {
-    inputSection += `-i "${assUrl}" `;
-    inputIndex++;
-  }
-  
-  // Build filter complex for Ken Burns + transitions
+
+  // Filters: per-image ultra-slow Ken Burns + fades, then concat.
   let filterComplex = '';
   const videoLabels: string[] = [];
-  
+
+  // Slow as possible without being imperceptible: only ~8% zoom over the *entire* image duration.
+  const maxZoom = 1.08;
+
   for (let i = 0; i < totalImages; i++) {
     const duration = durations[i];
-    const frames = Math.ceil(duration * fps);
-    
-    // Ultra-slow Ken Burns: alternate between zoom-in and zoom-out
-    // Zoom increment of 0.0002 per frame = very slow, cinematic zoom
+    const frames = Math.max(1, Math.ceil(duration * fps));
+    const zoomStep = Number(((maxZoom - 1.0) / frames).toFixed(10));
+
+    // Alternate direction for variety
     const isZoomIn = i % 2 === 0;
-    let zoomExpr: string;
-    
-    if (isZoomIn) {
-      // Zoom in: start at 1.0, slowly zoom to 1.2 (20% zoom)
-      zoomExpr = `'min(zoom+0.0002,1.2)'`;
-    } else {
-      // Zoom out: start at 1.2, slowly zoom back to 1.0
-      zoomExpr = `'if(lte(zoom,1.0),1.2,max(1.0,zoom-0.0002))'`;
-    }
-    
-    // Ken Burns zoompan with crossfade transitions
+    const expr = isZoomIn
+      ? `if(eq(on,0),1.0,min(${maxZoom},zoom+${zoomStep}))`
+      : `if(eq(on,0),${maxZoom},max(1.0,zoom-${zoomStep}))`;
+
     const fadeOutStart = Math.max(0, duration - 0.5);
-    const fadeInDuration = i > 0 ? `,fade=t=in:d=0.5` : '';
-    const fadeOutDuration = i < totalImages - 1 ? `,fade=t=out:st=${fadeOutStart}:d=0.5` : '';
-    
-    filterComplex += `[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:black,zoompan=z=${zoomExpr}:d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080:fps=${fps}${fadeInDuration}${fadeOutDuration}[v${i}]; `;
+    const fadeIn = i > 0 ? `,fade=t=in:d=0.5` : '';
+    const fadeOut = i < totalImages - 1 ? `,fade=t=out:st=${fadeOutStart}:d=0.5` : '';
+
+    filterComplex += `[${i}:v]` +
+      `scale=1920:1080:force_original_aspect_ratio=decrease,` +
+      `pad=1920:1080:-1:-1:black,` +
+      `zoompan=z='${expr}':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080:fps=${fps}` +
+      `${fadeIn}${fadeOut}` +
+      `[v${i}]; `;
+
     videoLabels.push(`[v${i}]`);
   }
-  
-  // Concatenate all video streams
+
   filterComplex += `${videoLabels.join('')}concat=n=${totalImages}:v=1:a=0[slideshow]`;
-  
-  // Apply subtitles if available
+
+  // Burn-in subtitles using the ASS file we generated (keeps exact styling from the .ass).
   if (assUrl) {
-    // Use subtitles filter with the ASS file URL
-    filterComplex += `; [slideshow]subtitles='${assUrl}':force_style='FontName=Arial,FontSize=56,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=3,Bold=1'[final]`;
+    filterComplex += `; [slideshow]ass='${assUrl}'[final]`;
   } else {
-    filterComplex += `; [slideshow]copy[final]`;
+    filterComplex += `; [slideshow]null[final]`;
   }
-  
-  // Build output section
+
   let outputSection = `-map "[final]" `;
-  
-  // Add audio mapping
   if (audioInputIndex >= 0) {
     outputSection += `-map ${audioInputIndex}:a `;
   }
-  
-  // Encoding settings for proper seeking (keyframes every 30 frames)
-  outputSection += `-c:v libx264 -preset medium -crf 23 -g 30 -keyint_min 30 `;
-  outputSection += `-c:a aac -b:a 192k `;
-  outputSection += `-movflags +faststart `;
-  outputSection += `-shortest `;
-  outputSection += `-y output.mp4`;
-  
-  const fullCommand = `ffmpeg ${inputSection}-filter_complex "${filterComplex}" ${outputSection}`;
-  
-  return fullCommand;
+
+  // Encoding tuned for seeking (frequent keyframes + faststart)
+  outputSection += `-c:v libx264 -profile:v high -level 4.1 -pix_fmt yuv420p `;
+  outputSection += `-preset medium -crf 23 -g 30 -keyint_min 30 -force_key_frames "expr:gte(t,n_forced*1)" `;
+  outputSection += `-c:a aac -b:a 192k -movflags +faststart -shortest -y output.mp4`;
+
+  return `ffmpeg ${inputSection}-filter_complex "${filterComplex}" ${outputSection}`;
 }
 
 // Simplified FFmpeg command that works with cog-ffmpeg file inputs
@@ -537,7 +517,8 @@ async function processRender(
       console.log('[BG] Calling magpai-app/cog-ffmpeg...');
       
       const ffmpegOutput = await replicate.run(
-        "magpai-app/cog-ffmpeg:e3db0c6ade74acc80af7cbbe9c3c67e8209f9c87d8b85b3749093be181d7aa6b",
+        // Latest public version (older pinned hash caused 422 + fallback)
+        "magpai-app/cog-ffmpeg:efd0b79b577bcd58ae7d035bce9de5c4659a59e09faafac4d426d61c04249251",
         {
           input: {
             command: ffmpegCommand,
@@ -547,21 +528,24 @@ async function processRender(
       );
 
       console.log('[BG] FFmpeg output:', JSON.stringify(ffmpegOutput));
-      
-      // Extract URL from output
-      if (ffmpegOutput) {
-        if (typeof ffmpegOutput === 'string') {
-          baseVideoUrl = ffmpegOutput;
-        } else if (Array.isArray(ffmpegOutput) && ffmpegOutput.length > 0) {
-          baseVideoUrl = typeof ffmpegOutput[0] === 'string' ? ffmpegOutput[0] : null;
-        } else if (typeof ffmpegOutput === 'object') {
-          const out = ffmpegOutput as Record<string, unknown>;
-          baseVideoUrl = (out.output1 || out.output || out.video || out.url) as string | null;
-          if (!baseVideoUrl && Array.isArray(out.output)) {
-            baseVideoUrl = out.output[0] as string;
-          }
+
+      const pickUrl = (out: unknown): string | null => {
+        if (!out) return null;
+        if (typeof out === 'string') return out;
+        if (Array.isArray(out)) return typeof out[0] === 'string' ? (out[0] as string) : null;
+        if (typeof out === 'object') {
+          const o = out as any;
+          if (Array.isArray(o.files) && o.files.length) return o.files[0] as string;
+          if (typeof o.output1 === 'string') return o.output1;
+          if (typeof o.output === 'string') return o.output;
+          if (typeof o.video === 'string') return o.video;
+          if (typeof o.url === 'string') return o.url;
+          if (Array.isArray(o.output) && o.output.length) return o.output[0] as string;
         }
-      }
+        return null;
+      };
+
+      baseVideoUrl = pickUrl(ffmpegOutput);
       
       if (baseVideoUrl) {
         console.log('[BG] Ken Burns video generated:', baseVideoUrl);
