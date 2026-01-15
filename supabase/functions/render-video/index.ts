@@ -7,6 +7,13 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// ============================================================================
+// PHASE 2 & 3: BULLETPROOF RENDER PIPELINE
+// - NO silent fallback - if FFmpeg fails, render fails with clear error
+// - Segmented cog-ffmpeg approach using file1..file4 inputs (local files, not URLs)
+// - Ken Burns with ultra-slow zoom + burned-in ASS subtitles
+// ============================================================================
+
 // Generate TTS audio using OpenAI
 async function generateTTSAudio(
   text: string,
@@ -210,36 +217,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   return assContent;
 }
 
-// Build FFmpeg command for Ken Burns slideshow with (optional) burned-in ASS subtitles
-function buildFfmpegCommand(
-  imageUrls: string[],
+// ============================================================================
+// PHASE 3: SEGMENTED COG-FFMPEG PIPELINE
+// Uses file1..file4 inputs to avoid remote URL fetch issues
+// ============================================================================
+
+interface SegmentResult {
+  videoUrl: string;
+  segmentIndex: number;
+}
+
+// Build FFmpeg command for a single segment (up to 4 images)
+// Uses LOCAL file references (file1, file2, etc.) which cog-ffmpeg downloads
+function buildSegmentFfmpegCommand(
+  imageCount: number,
   durations: number[],
-  audioUrl: string | null,
-  assUrl: string | null,
   fps: number = 30
 ): string {
-  const totalImages = imageUrls.length;
-
-  // Inputs: images (looped) + optional audio. Subtitles are referenced by URL in the filter.
-  let inputSection = '';
-  for (let i = 0; i < totalImages; i++) {
-    const duration = durations[i];
-    inputSection += `-loop 1 -t ${duration} -i "${imageUrls[i]}" `;
-  }
-
-  const audioInputIndex = audioUrl ? totalImages : -1;
-  if (audioUrl) {
-    inputSection += `-i "${audioUrl}" `;
-  }
-
-  // Filters: per-image ultra-slow Ken Burns + fades, then concat.
+  const maxZoom = 1.08;
   let filterComplex = '';
   const videoLabels: string[] = [];
 
-  // Slow as possible without being imperceptible: only ~8% zoom over the *entire* image duration.
-  const maxZoom = 1.08;
-
-  for (let i = 0; i < totalImages; i++) {
+  for (let i = 0; i < imageCount; i++) {
     const duration = durations[i];
     const frames = Math.max(1, Math.ceil(duration * fps));
     const zoomStep = Number(((maxZoom - 1.0) / frames).toFixed(10));
@@ -252,8 +251,9 @@ function buildFfmpegCommand(
 
     const fadeOutStart = Math.max(0, duration - 0.5);
     const fadeIn = i > 0 ? `,fade=t=in:d=0.5` : '';
-    const fadeOut = i < totalImages - 1 ? `,fade=t=out:st=${fadeOutStart}:d=0.5` : '';
+    const fadeOut = i < imageCount - 1 ? `,fade=t=out:st=${fadeOutStart}:d=0.5` : '';
 
+    // Reference file1, file2, etc. (local files downloaded by cog-ffmpeg)
     filterComplex += `[${i}:v]` +
       `scale=1920:1080:force_original_aspect_ratio=decrease,` +
       `pad=1920:1080:-1:-1:black,` +
@@ -264,101 +264,131 @@ function buildFfmpegCommand(
     videoLabels.push(`[v${i}]`);
   }
 
-  filterComplex += `${videoLabels.join('')}concat=n=${totalImages}:v=1:a=0[slideshow]`;
+  filterComplex += `${videoLabels.join('')}concat=n=${imageCount}:v=1:a=0[out]`;
 
-  // Burn-in subtitles using the ASS file we generated (keeps exact styling from the .ass).
-  if (assUrl) {
-    filterComplex += `; [slideshow]ass='${assUrl}'[final]`;
-  } else {
-    filterComplex += `; [slideshow]null[final]`;
+  // Build input section using file1, file2, etc.
+  let inputSection = '';
+  for (let i = 0; i < imageCount; i++) {
+    const duration = durations[i];
+    inputSection += `-loop 1 -t ${duration} -i file${i + 1} `;
   }
 
-  let outputSection = `-map "[final]" `;
-  if (audioInputIndex >= 0) {
-    outputSection += `-map ${audioInputIndex}:a `;
-  }
-
-  // Encoding tuned for seeking (frequent keyframes + faststart)
-  outputSection += `-c:v libx264 -profile:v high -level 4.1 -pix_fmt yuv420p `;
-  outputSection += `-preset medium -crf 23 -g 30 -keyint_min 30 -force_key_frames "expr:gte(t,n_forced*1)" `;
-  outputSection += `-c:a aac -b:a 192k -movflags +faststart -shortest -y output.mp4`;
+  // Seek-friendly encoding
+  const outputSection = `-map "[out]" -c:v libx264 -profile:v high -level 4.1 -pix_fmt yuv420p ` +
+    `-preset medium -crf 23 -g 60 -keyint_min 60 -movflags +faststart -y output.mp4`;
 
   return `ffmpeg ${inputSection}-filter_complex "${filterComplex}" ${outputSection}`;
 }
 
-// Simplified FFmpeg command that works with cog-ffmpeg file inputs
-function buildSimpleFfmpegCommand(
-  numImages: number,
-  durations: number[],
-  hasAudio: boolean,
-  hasSubtitles: boolean,
-  fps: number = 30
-): { command: string; fileMapping: string } {
-  // cog-ffmpeg supports file1, file2, file3, file4 as inputs
-  // We'll pass: file1=concat list, file2=audio, file3=subtitles manifest
-  
-  // For Ken Burns, we need to process each image individually
-  // Since we can't use URLs directly, we'll use a different approach:
-  // Create a manifest and let FFmpeg handle it
-  
+// Build FFmpeg command to concatenate multiple segment videos
+function buildConcatFfmpegCommand(segmentCount: number): string {
+  let inputSection = '';
   let filterComplex = '';
   const videoLabels: string[] = [];
-  
-  for (let i = 0; i < numImages; i++) {
-    const duration = durations[i];
-    const frames = Math.ceil(duration * fps);
-    
-    // Alternate Ken Burns direction
-    const isZoomIn = i % 2 === 0;
-    let zoomExpr: string;
-    
-    if (isZoomIn) {
-      zoomExpr = `'min(zoom+0.0002,1.2)'`;
-    } else {
-      zoomExpr = `'if(lte(zoom,1.0),1.2,max(1.0,zoom-0.0002))'`;
-    }
-    
-    const fadeOutStart = Math.max(0, duration - 0.5);
-    const fadeInDuration = i > 0 ? `,fade=t=in:d=0.5` : '';
-    const fadeOutDuration = i < numImages - 1 ? `,fade=t=out:st=${fadeOutStart}:d=0.5` : '';
-    
-    // Reference images as img_0.jpg, img_1.jpg, etc. (will be downloaded by wrapper script)
-    filterComplex += `[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:black,zoompan=z=${zoomExpr}:d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080:fps=${fps}${fadeInDuration}${fadeOutDuration}[v${i}]; `;
-    videoLabels.push(`[v${i}]`);
+
+  for (let i = 0; i < segmentCount; i++) {
+    inputSection += `-i file${i + 1} `;
+    videoLabels.push(`[${i}:v]`);
   }
-  
-  filterComplex += `${videoLabels.join('')}concat=n=${numImages}:v=1:a=0[slideshow]`;
-  
-  // Add subtitles filter
-  if (hasSubtitles) {
-    filterComplex += `; [slideshow]ass=subtitles.ass[final]`;
-  } else {
-    filterComplex += `; [slideshow]copy[final]`;
-  }
-  
-  // Build the command
-  let inputs = '';
-  for (let i = 0; i < numImages; i++) {
-    inputs += `-loop 1 -t ${durations[i]} -i img_${i}.jpg `;
-  }
-  
-  const audioIndex = numImages;
-  if (hasAudio) {
-    inputs += `-i audio.mp3 `;
-  }
-  
-  let output = `-map "[final]" `;
-  if (hasAudio) {
-    output += `-map ${audioIndex}:a `;
-  }
-  output += `-c:v libx264 -preset medium -crf 23 -g 30 -keyint_min 30 -c:a aac -b:a 192k -movflags +faststart -shortest -y output.mp4`;
-  
-  const command = `${inputs}-filter_complex "${filterComplex}" ${output}`;
-  
-  return { command, fileMapping: 'See manifest' };
+
+  filterComplex = `${videoLabels.join('')}concat=n=${segmentCount}:v=1:a=0[out]`;
+
+  return `ffmpeg ${inputSection}-filter_complex "${filterComplex}" -map "[out]" -c:v libx264 -preset medium -crf 23 -g 60 -movflags +faststart -y output.mp4`;
 }
 
-// Background render processing function - IMAGES ONLY with Ken Burns via FFmpeg
+// Build FFmpeg command to mux audio + burn subtitles into video
+function buildFinalMuxCommand(hasAudio: boolean, hasSubtitles: boolean): string {
+  // file1 = video, file2 = audio (optional), file3 = subtitles.ass (optional)
+  let inputs = '-i file1 ';
+  if (hasAudio) inputs += '-i file2 ';
+
+  let filterComplex = '[0:v]copy[vout]';
+  if (hasSubtitles) {
+    // Burn in subtitles from file3 (downloaded locally by cog-ffmpeg)
+    filterComplex = `[0:v]ass=file3[vout]`;
+  }
+
+  let output = `-filter_complex "${filterComplex}" -map "[vout]" `;
+  if (hasAudio) {
+    output += `-map 1:a -c:a aac -b:a 192k `;
+  }
+  output += `-c:v libx264 -preset medium -crf 23 -g 60 -keyint_min 60 -movflags +faststart -shortest -y output.mp4`;
+
+  return `ffmpeg ${inputs}${output}`;
+}
+
+// Helper to run cog-ffmpeg with retries
+async function runCogFfmpeg(
+  replicate: any,
+  command: string,
+  files: Record<string, string>,
+  description: string,
+  maxRetries: number = 2
+): Promise<string> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[FFmpeg] ${description} (attempt ${attempt}/${maxRetries})`);
+      console.log(`[FFmpeg] Command: ${command.substring(0, 200)}...`);
+      
+      const input: Record<string, any> = {
+        command,
+        output1: "output.mp4",
+      };
+      
+      // Add file inputs (file1, file2, file3, file4)
+      for (const [key, url] of Object.entries(files)) {
+        input[key] = url;
+      }
+      
+      const output = await replicate.run(
+        "magpai-app/cog-ffmpeg:efd0b79b577bcd58ae7d035bce9de5c4659a59e09faafac4d426d61c04249251",
+        { input }
+      );
+      
+      // Extract URL from output
+      const pickUrl = (out: unknown): string | null => {
+        if (!out) return null;
+        if (typeof out === 'string') return out;
+        if (Array.isArray(out)) return typeof out[0] === 'string' ? (out[0] as string) : null;
+        if (typeof out === 'object') {
+          const o = out as any;
+          if (Array.isArray(o.files) && o.files.length) return o.files[0] as string;
+          if (typeof o.output1 === 'string') return o.output1;
+          if (typeof o.output === 'string') return o.output;
+          if (typeof o.video === 'string') return o.video;
+          if (typeof o.url === 'string') return o.url;
+          if (Array.isArray(o.output) && o.output.length) return o.output[0] as string;
+        }
+        return null;
+      };
+      
+      const url = pickUrl(output);
+      if (!url) {
+        throw new Error(`No output URL from FFmpeg for: ${description}`);
+      }
+      
+      console.log(`[FFmpeg] ${description} SUCCESS: ${url}`);
+      return url;
+      
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.error(`[FFmpeg] ${description} attempt ${attempt} failed:`, lastError.message);
+      
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s before retry
+      }
+    }
+  }
+  
+  throw lastError || new Error(`FFmpeg failed: ${description}`);
+}
+
+// ============================================================================
+// MAIN RENDER PROCESSING
+// ============================================================================
+
 async function processRender(
   projectId: string,
   scenes: any[],
@@ -374,16 +404,22 @@ async function processRender(
   const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, supabaseKey);
   const replicate = new Replicate({ auth: REPLICATE_API_KEY });
+  
+  // Helper to update progress in error_message (breadcrumbs)
+  const updateProgress = async (stage: string) => {
+    console.log(`[BG] ${stage}`);
+    await supabase.from('renders').update({ error_message: `[PROGRESS] ${stage}` }).eq('id', renderId);
+  };
 
   try {
-    console.log(`[BG] Starting render ${renderId} for project ${projectId}`);
+    await updateProgress(`Starting render for project ${projectId}`);
 
     // Step 0: Generate TTS audio if no audio provided
     let finalAudioUrl = audioUrl;
     let finalAudioDuration = audioDuration;
     
     if (!audioUrl) {
-      console.log('[BG] No audio provided, generating TTS...');
+      await updateProgress('No audio provided, generating TTS...');
       const fullNarration = scenes.map((s: any) => s.narration).join(' ');
       
       if (fullNarration.trim()) {
@@ -398,7 +434,7 @@ async function processRender(
     }
 
     // Step 1: Collect ALL images from ALL scenes
-    console.log(`[BG] Processing ${scenes.length} scenes for images...`);
+    await updateProgress(`Processing ${scenes.length} scenes for images...`);
     
     const allImages: Array<{
       url: string;
@@ -437,15 +473,21 @@ async function processRender(
     const totalImages = allImages.length;
     console.log(`[BG] Total images collected: ${totalImages}`);
 
+    // PHASE 4 GUARDRAIL: Validate we have images
     if (totalImages === 0) {
-      throw new Error('No images available for video generation. Please add images to your scenes.');
+      throw new Error('VALIDATION_ERROR: No images available for video generation. Please add images to your scenes.');
     }
 
     // Calculate target duration
     const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
     const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
     
-    console.log(`[BG] Target duration: ${targetDurationSec}s`);
+    // PHASE 4 GUARDRAIL: Validate duration
+    if (targetDurationSec <= 0) {
+      throw new Error('VALIDATION_ERROR: Cannot determine video duration. Please ensure audio has valid duration or scenes have end times.');
+    }
+    
+    console.log(`[BG] Target duration: ${targetDurationSec}s (${(targetDurationSec / 60).toFixed(1)} minutes)`);
 
     // Calculate duration per image
     let totalCustomDuration = 0;
@@ -470,10 +512,18 @@ async function processRender(
       duration: img.customDuration && img.customDuration > 0 ? img.customDuration : autoDurationPerImage,
     }));
     
-    console.log(`[BG] Image durations calculated. Custom: ${imagesWithCustomDuration}, Auto: ${imagesWithoutCustomDuration} @ ${autoDurationPerImage.toFixed(1)}s each`);
+    // PHASE 4 GUARDRAIL: Validate duration math
+    const computedTotalDuration = imageList.reduce((sum, img) => sum + img.duration, 0);
+    const durationDiff = Math.abs(computedTotalDuration - targetDurationSec);
+    if (durationDiff > 5) {
+      console.warn(`[BG] Duration mismatch: computed=${computedTotalDuration.toFixed(1)}s, target=${targetDurationSec.toFixed(1)}s, diff=${durationDiff.toFixed(1)}s`);
+    }
+    
+    console.log(`[BG] Image durations: Custom=${imagesWithCustomDuration}, Auto=${imagesWithoutCustomDuration} @ ${autoDurationPerImage.toFixed(1)}s each`);
+    await updateProgress(`Images prepared: ${totalImages} images, ${computedTotalDuration.toFixed(0)}s total`);
 
     // Step 2: Generate ASS subtitles
-    console.log('[BG] Generating ASS subtitles...');
+    await updateProgress('Generating ASS subtitles...');
     const assContent = generateAssSubtitles(wordTimestamps, scenes);
     const assLineCount = assContent.split('\n').length;
     console.log(`[BG] ASS subtitles generated: ${assLineCount} lines`);
@@ -496,140 +546,136 @@ async function processRender(
       console.error('[BG] ASS upload error:', assUploadError);
     }
 
-    // Step 3: Generate Ken Burns video using FFmpeg via Replicate
-    console.log('[BG] Generating Ken Burns video with FFmpeg...');
+    // ========================================================================
+    // PHASE 3: SEGMENTED FFMPEG PIPELINE
+    // Process images in segments of 4, then concatenate, then mux audio+subs
+    // ========================================================================
     
-    // Build image URLs and durations arrays
-    const imageUrls = imageList.map(img => img.url);
-    const durations = imageList.map(img => img.duration);
+    await updateProgress('Starting segmented FFmpeg pipeline (Ken Burns)...');
     
-    // Use magpai-app/cog-ffmpeg for full FFmpeg control
-    // This model accepts URLs directly in the command!
-    const ffmpegCommand = buildFfmpegCommand(imageUrls, durations, finalAudioUrl, assFileUrl, 30);
-    console.log('[BG] FFmpeg command length:', ffmpegCommand.length);
-    console.log('[BG] FFmpeg command preview:', ffmpegCommand.substring(0, 500) + '...');
-
-    let baseVideoUrl: string | null = null;
+    const IMAGES_PER_SEGMENT = 4;
+    const segments: Array<{ images: typeof imageList }> = [];
     
-    try {
-      // Call cog-ffmpeg with the command
-      // The model can fetch URLs directly, so we pass them in the command
-      console.log('[BG] Calling magpai-app/cog-ffmpeg...');
+    // Split images into segments
+    for (let i = 0; i < imageList.length; i += IMAGES_PER_SEGMENT) {
+      segments.push({
+        images: imageList.slice(i, i + IMAGES_PER_SEGMENT),
+      });
+    }
+    
+    console.log(`[BG] Split into ${segments.length} segments (max ${IMAGES_PER_SEGMENT} images each)`);
+    
+    // Process each segment
+    const segmentVideos: string[] = [];
+    
+    for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+      const segment = segments[segIdx];
+      const imageCount = segment.images.length;
+      const durations = segment.images.map(img => img.duration);
       
-      const ffmpegOutput = await replicate.run(
-        // Latest public version (older pinned hash caused 422 + fallback)
-        "magpai-app/cog-ffmpeg:efd0b79b577bcd58ae7d035bce9de5c4659a59e09faafac4d426d61c04249251",
-        {
-          input: {
-            command: ffmpegCommand,
-            output1: "output.mp4",
-          },
-        }
+      await updateProgress(`Rendering segment ${segIdx + 1}/${segments.length} (${imageCount} images)...`);
+      
+      // Build FFmpeg command for this segment
+      const command = buildSegmentFfmpegCommand(imageCount, durations, 30);
+      
+      // Build file inputs (file1..file4)
+      const files: Record<string, string> = {};
+      for (let i = 0; i < imageCount; i++) {
+        files[`file${i + 1}`] = segment.images[i].url;
+      }
+      
+      // Run FFmpeg for this segment
+      const segmentUrl = await runCogFfmpeg(
+        replicate,
+        command,
+        files,
+        `Segment ${segIdx + 1}/${segments.length}`,
+        2 // retries
       );
-
-      console.log('[BG] FFmpeg output:', JSON.stringify(ffmpegOutput));
-
-      const pickUrl = (out: unknown): string | null => {
-        if (!out) return null;
-        if (typeof out === 'string') return out;
-        if (Array.isArray(out)) return typeof out[0] === 'string' ? (out[0] as string) : null;
-        if (typeof out === 'object') {
-          const o = out as any;
-          if (Array.isArray(o.files) && o.files.length) return o.files[0] as string;
-          if (typeof o.output1 === 'string') return o.output1;
-          if (typeof o.output === 'string') return o.output;
-          if (typeof o.video === 'string') return o.video;
-          if (typeof o.url === 'string') return o.url;
-          if (Array.isArray(o.output) && o.output.length) return o.output[0] as string;
-        }
-        return null;
-      };
-
-      baseVideoUrl = pickUrl(ffmpegOutput);
       
-      if (baseVideoUrl) {
-        console.log('[BG] Ken Burns video generated:', baseVideoUrl);
-      }
-    } catch (ffmpegErr) {
-      console.error('[BG] FFmpeg failed:', ffmpegErr);
+      segmentVideos.push(segmentUrl);
+    }
+    
+    console.log(`[BG] All ${segmentVideos.length} segments rendered successfully`);
+    
+    // Concatenate segments if more than one
+    let slideshowUrl: string;
+    
+    if (segmentVideos.length === 1) {
+      slideshowUrl = segmentVideos[0];
+      console.log('[BG] Single segment, no concatenation needed');
+    } else {
+      await updateProgress(`Concatenating ${segmentVideos.length} segments...`);
       
-      // Fallback: try the simpler slideshow model without Ken Burns
-      console.log('[BG] Falling back to lucataco slideshow (without Ken Burns)...');
+      // Tree reduction: concat up to 4 at a time until we have 1
+      let currentVideos = [...segmentVideos];
+      let concatRound = 1;
       
-      try {
-        // Clamp durations for the slideshow model
-        const clampedDurations = durations.map(d => Math.min(10, d));
-        const avgDuration = Math.round(clampedDurations.reduce((a, b) => a + b, 0) / clampedDurations.length);
+      while (currentVideos.length > 1) {
+        const nextRoundVideos: string[] = [];
         
-        const slideshowOut = await replicate.run(
-          "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
-          {
-            input: {
-              images: imageUrls,
-              duration_per_image: Math.max(2, Math.min(10, avgDuration)),
-              frame_rate: 30,
-              resolution: "1080p",
-              aspect_ratio: "16:9",
-              transition_type: "fade",
-            },
-          }
-        );
-        
-        if (slideshowOut) {
-          if (typeof slideshowOut === 'string') {
-            baseVideoUrl = slideshowOut;
-          } else if (Array.isArray(slideshowOut)) {
-            baseVideoUrl = slideshowOut[0] as string;
-          }
-        }
-        
-        if (baseVideoUrl) {
-          console.log('[BG] Fallback slideshow generated:', baseVideoUrl);
+        for (let i = 0; i < currentVideos.length; i += 4) {
+          const batch = currentVideos.slice(i, i + 4);
           
-          // Still need to mux audio if available
-          if (finalAudioUrl) {
-            try {
-              console.log('[BG] Muxing audio with fallback video...');
-              const muxOut = await replicate.run(
-                "lucataco/video-audio-merge:8c3d57c9c9a1aaa05feabafbcd2dff9f68a5cb394e54ec020c1c2dcc42bde109",
-                {
-                  input: {
-                    video_file: baseVideoUrl,
-                    audio_file: finalAudioUrl,
-                    duration_mode: "audio",
-                  },
-                }
-              );
-              
-              if (muxOut) {
-                const muxUrl = typeof muxOut === 'string' ? muxOut : (Array.isArray(muxOut) ? muxOut[0] : null);
-                if (muxUrl) {
-                  baseVideoUrl = muxUrl as string;
-                  console.log('[BG] Audio muxed:', baseVideoUrl);
-                }
-              }
-            } catch (muxErr) {
-              console.error('[BG] Audio mux failed:', muxErr);
+          if (batch.length === 1) {
+            nextRoundVideos.push(batch[0]);
+          } else {
+            const concatCommand = buildConcatFfmpegCommand(batch.length);
+            const files: Record<string, string> = {};
+            for (let j = 0; j < batch.length; j++) {
+              files[`file${j + 1}`] = batch[j];
             }
+            
+            const concatUrl = await runCogFfmpeg(
+              replicate,
+              concatCommand,
+              files,
+              `Concat round ${concatRound}, batch ${Math.floor(i / 4) + 1}`,
+              2
+            );
+            
+            nextRoundVideos.push(concatUrl);
           }
         }
-      } catch (fallbackErr) {
-        console.error('[BG] Fallback slideshow also failed:', fallbackErr);
-        throw new Error('Failed to generate video with both FFmpeg and fallback methods');
+        
+        currentVideos = nextRoundVideos;
+        concatRound++;
       }
+      
+      slideshowUrl = currentVideos[0];
+      console.log('[BG] Concatenation complete');
     }
-
-    if (!baseVideoUrl) {
-      throw new Error('Failed to generate video');
-    }
+    
+    // Final mux: add audio + burn subtitles
+    await updateProgress('Final pass: muxing audio and burning subtitles...');
+    
+    const hasAudio = !!finalAudioUrl;
+    const hasSubtitles = !!assFileUrl;
+    
+    const muxCommand = buildFinalMuxCommand(hasAudio, hasSubtitles);
+    const muxFiles: Record<string, string> = {
+      file1: slideshowUrl,
+    };
+    if (hasAudio) muxFiles.file2 = finalAudioUrl!;
+    if (hasSubtitles) muxFiles.file3 = assFileUrl!;
+    
+    const finalVideoUrl = await runCogFfmpeg(
+      replicate,
+      muxCommand,
+      muxFiles,
+      'Final mux (audio + subtitles)',
+      2
+    );
+    
+    console.log('[BG] Final video generated:', finalVideoUrl);
 
     // Step 4: Upload final video to storage
-    console.log('[BG] Uploading video to storage...');
-    let finalVideoUrl: string | null = null;
+    await updateProgress('Uploading final video to storage...');
+    let storedVideoUrl: string;
     
-    const videoResponse = await fetch(baseVideoUrl);
+    const videoResponse = await fetch(finalVideoUrl);
     if (!videoResponse.ok) {
-      throw new Error(`Failed to download video: ${videoResponse.status}`);
+      throw new Error(`Failed to download final video: ${videoResponse.status}`);
     }
 
     const contentType = videoResponse.headers.get('content-type') || 'video/mp4';
@@ -647,11 +693,11 @@ async function processRender(
 
     if (uploadError) {
       console.error('[BG] Upload error:', uploadError);
-      finalVideoUrl = baseVideoUrl;
+      storedVideoUrl = finalVideoUrl; // Use Replicate URL as fallback
     } else {
       const { data: publicUrl } = supabase.storage.from('renders').getPublicUrl(fileName);
-      finalVideoUrl = publicUrl.publicUrl;
-      console.log('[BG] Video uploaded:', finalVideoUrl);
+      storedVideoUrl = publicUrl.publicUrl;
+      console.log('[BG] Video uploaded:', storedVideoUrl);
     }
 
     // Step 5: Generate SEO metadata
@@ -660,7 +706,7 @@ async function processRender(
 
     if (lovableApiKey && scenes.length > 0) {
       try {
-        console.log('[BG] Generating SEO metadata...');
+        await updateProgress('Generating SEO metadata...');
         const narrationText = scenes.map((s: any) => s.narration).join(' ');
         
         const seoResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -801,7 +847,7 @@ async function processRender(
     
     if (lovableApiKey && generatedThumbnailUrl) {
       try {
-        console.log('[BG] Generating viral thumbnail...');
+        await updateProgress('Generating viral thumbnail...');
         const baseImageUrl = thumbnailImageUrl || allImages[0]?.url;
         const videoTitle = projectTitle || seoData.title || 'Video';
         const narrationSummary = scenes.map((s: any) => s.narration).join(' ').substring(0, 500);
@@ -875,14 +921,12 @@ Make it irresistible to click!`
       }
     }
 
-    // Step 8: Update render record with results
-    const isSuccess = !!finalVideoUrl;
-
+    // Step 8: Update render record with SUCCESS
     const { error: updateError } = await supabase
       .from('renders')
       .update({
-        status: isSuccess ? 'completed' : 'failed',
-        video_url: finalVideoUrl,
+        status: 'completed',
+        video_url: storedVideoUrl,
         thumbnail_url: generatedThumbnailUrl,
         seo_title: seoData.title,
         seo_description: seoData.description,
@@ -890,7 +934,7 @@ Make it irresistible to click!`
         seo_hashtags: seoData.hashtags,
         subtitle_srt: srtContent,
         subtitle_vtt: vttContent,
-        error_message: isSuccess ? null : 'Failed to generate final mp4',
+        error_message: `[SUCCESS] Pipeline=segmented_ffmpeg, Segments=${segments.length}, Images=${totalImages}, Duration=${computedTotalDuration.toFixed(0)}s`,
       })
       .eq('id', renderId);
 
@@ -901,13 +945,15 @@ Make it irresistible to click!`
     // Update project status
     await supabase
       .from('projects')
-      .update({ status: isSuccess ? 'completed' : 'ready' })
+      .update({ status: 'completed' })
       .eq('id', projectId);
 
-    console.log(`[BG] Render ${renderId} completed: ${isSuccess ? 'SUCCESS' : 'FAILED'}`);
+    console.log(`[BG] Render ${renderId} completed: SUCCESS (segmented pipeline, ${segments.length} segments, ${totalImages} images)`);
 
   } catch (error) {
-    console.error(`[BG] Render ${renderId} failed:`, error);
+    // PHASE 2: NO SILENT FALLBACK - render fails with clear error
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[BG] Render ${renderId} FAILED:`, errorMessage);
     
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -917,7 +963,7 @@ Make it irresistible to click!`
       .from('renders')
       .update({
         status: 'failed',
-        error_message: error instanceof Error ? error.message : 'Unknown error',
+        error_message: `[FAILED] ${errorMessage}`,
       })
       .eq('id', renderId);
 
@@ -968,6 +1014,7 @@ serve(async (req) => {
         project_id: projectId,
         status: 'rendering',
         duration: audioDuration,
+        error_message: '[STARTED] Initializing segmented FFmpeg pipeline...',
       })
       .select()
       .single();

@@ -282,6 +282,10 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
 
         const transcripts: string[] = [];
         let totalDuration = 0;
+        
+        // PHASE 1 FIX: Accumulate word timestamps with proper time offsets
+        const allWordTimestamps: Array<{ word: string; start: number; end: number }> = [];
+        let timeOffset = 0;
 
         for (let i = 0; i < chunkFiles.length; i++) {
           toast.info(`Transcribing chunk ${i + 1}/${chunkFiles.length}...`);
@@ -302,17 +306,35 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           if (!data?.success) throw new Error(data?.error || `Transcription failed for chunk ${i + 1}`);
 
           transcripts.push(data.text);
-          totalDuration += Number(data.duration || 0);
+          const chunkDuration = Number(data.duration || 0);
+          totalDuration += chunkDuration;
+          
+          // Accumulate word timestamps with offset applied
+          if (data.words && Array.isArray(data.words)) {
+            for (const word of data.words) {
+              allWordTimestamps.push({
+                word: word.word,
+                start: word.start + timeOffset,
+                end: word.end + timeOffset,
+              });
+            }
+          }
+          
+          // Update offset for next chunk
+          timeOffset += chunkDuration;
         }
 
         const fullTranscript = transcripts.join(" ");
+        
+        console.log(`Chunked transcription complete: ${allWordTimestamps.length} words, ${totalDuration}s total`);
 
-        // Save transcript to database
+        // Save transcript AND word_timestamps to database
         const { error: updateError } = await supabase
           .from("projects")
           .update({
             transcript: fullTranscript,
             audio_duration: totalDuration || currentProject.audio_duration,
+            word_timestamps: allWordTimestamps,
             status: "processing",
           })
           .eq("id", currentProject.id);
@@ -327,7 +349,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           status: "processing" as const,
         }));
 
-        toast.success(`Transcription complete! Duration: ${Math.round(totalDuration)}s`);
+        toast.success(`Transcription complete! Duration: ${Math.round(totalDuration)}s, ${allWordTimestamps.length} words`);
         onRefresh();
         return;
       }

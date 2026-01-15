@@ -428,8 +428,11 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
         setUploadProgress(60);
         setUploadStage("Transcribing audio...");
 
-        // Transcribe each chunk
+        // Transcribe each chunk - PHASE 1 FIX: accumulate word timestamps with offsets
         const transcripts: string[] = [];
+        const allWordTimestamps: Array<{ word: string; start: number; end: number }> = [];
+        let timeOffset = 0;
+        
         for (let i = 0; i < chunkUrls.length; i++) {
           setUploadStage(`Transcribing chunk ${i + 1}/${chunkUrls.length}...`);
           
@@ -450,6 +453,21 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
           }
 
           transcripts.push(response.data.text);
+          const chunkDuration = Number(response.data.duration || 0);
+          
+          // Accumulate word timestamps with proper time offset
+          if (response.data.words && Array.isArray(response.data.words)) {
+            for (const word of response.data.words) {
+              allWordTimestamps.push({
+                word: word.word,
+                start: word.start + timeOffset,
+                end: word.end + timeOffset,
+              });
+            }
+          }
+          
+          // Update offset for next chunk
+          timeOffset += chunkDuration;
           
           const transcribeProgress = 60 + ((i + 1) / chunkUrls.length) * 30;
           setUploadProgress(transcribeProgress);
@@ -457,14 +475,17 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
 
         // Combine all transcripts
         const fullTranscript = transcripts.join(' ');
+        
+        console.log(`Chunked transcription: ${allWordTimestamps.length} words, ${totalDuration}s total`);
 
-        // Update project with transcript
+        // Update project with transcript AND word_timestamps
         const { error: updateError } = await supabase
           .from("projects")
           .update({ 
             audio_url: chunkUrls[0], // Use first chunk URL as reference
             transcript: fullTranscript,
             audio_duration: totalDuration,
+            word_timestamps: allWordTimestamps,
             status: 'processing'
           })
           .eq("id", project.id);
@@ -472,7 +493,7 @@ export function CreateProject({ onProjectCreated }: CreateProjectProps) {
         if (updateError) throw updateError;
 
         setUploadProgress(100);
-        toast.success(`Transcribed ${durationMinutes} minutes of audio successfully!`);
+        toast.success(`Transcribed ${durationMinutes} minutes of audio with ${allWordTimestamps.length} words!`);
         
       } else {
         // Small file - upload directly and use simple transcription
