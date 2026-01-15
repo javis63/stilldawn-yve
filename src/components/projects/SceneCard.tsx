@@ -446,11 +446,10 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
               )}
             </div>
 
-            {/* Ken Burns Notice */}
+            {/* Motion Notice */}
             <div className="bg-primary/10 border border-primary/20 rounded-lg p-3">
               <p className="text-sm text-primary">
-                <strong>Ken Burns Effect:</strong> Each image will have dynamic pan/zoom animations applied for the full duration it's displayed.
-                {allImages.length > 1 && ` Images will cycle with ${Math.round(duration / allImages.length)}s per image.`}
+                <strong>Motion:</strong> The current renderer uses simple slideshow transitions. (Ken Burns-style pan/zoom isn’t enabled yet.)
               </p>
             </div>
 
