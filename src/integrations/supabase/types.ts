@@ -141,6 +141,7 @@ export type Database = {
           image_url: string | null
           image_urls: string[] | null
           narration: string
+          parts: Json | null
           project_id: string
           scene_number: number
           scene_type: Database["public"]["Enums"]["scene_type"]
@@ -158,6 +159,7 @@ export type Database = {
           image_url?: string | null
           image_urls?: string[] | null
           narration: string
+          parts?: Json | null
           project_id: string
           scene_number: number
           scene_type?: Database["public"]["Enums"]["scene_type"]
@@ -175,6 +177,7 @@ export type Database = {
           image_url?: string | null
           image_urls?: string[] | null
           narration?: string
+          parts?: Json | null
           project_id?: string
           scene_number?: number
           scene_type?: Database["public"]["Enums"]["scene_type"]

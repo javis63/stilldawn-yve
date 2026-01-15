@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.generate-tts-chunk]
 verify_jwt = false
+
+[functions.generate-scene-parts]
+verify_jwt = false
