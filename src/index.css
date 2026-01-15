@@ -34,6 +34,10 @@
     --input: 0 0% 20%;
     --ring: 0 72% 51%;
 
+    /* Captions (custom overlay) */
+    --caption: 48 100% 55%;
+    --caption-outline: 0 0% 0%;
+
     --radius: 0.5rem;
 
     --sidebar-background: 0 0% 8%;
@@ -93,5 +97,18 @@
 
   body {
     @apply bg-background text-foreground;
+  }
+
+  /* Yellow captions with black border (stroke-like via layered shadows) */
+  .caption-outline {
+    text-shadow:
+      0 2px 0 hsl(var(--caption-outline)),
+      0 -2px 0 hsl(var(--caption-outline)),
+      2px 0 0 hsl(var(--caption-outline)),
+      -2px 0 0 hsl(var(--caption-outline)),
+      2px 2px 0 hsl(var(--caption-outline)),
+      -2px 2px 0 hsl(var(--caption-outline)),
+      2px -2px 0 hsl(var(--caption-outline)),
+      -2px -2px 0 hsl(var(--caption-outline));
   }
 }
