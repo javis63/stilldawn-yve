@@ -27,18 +27,25 @@ serve(async (req) => {
     console.log(`Transcript length: ${transcript.length} characters`);
     console.log(`Audio duration: ${audioDuration}s`);
 
-    // Calculate target number of scenes (2-4 minutes per scene = 120-240 seconds)
-    // Target ~3 minutes (180s) per scene on average
-    const targetScenes = Math.max(1, Math.ceil((audioDuration || 60) / 180));
-    console.log(`Target scenes: ${targetScenes} (aiming for 2-4 min each)`);
+    // Calculate target number of scenes - MAX 10 scenes for stories up to 2 hours
+    // For a 2-hour (7200s) audio, that's 720s (12 min) per scene minimum
+    const rawScenes = Math.ceil((audioDuration || 60) / 600); // ~10 min per scene baseline
+    const targetScenes = Math.min(10, Math.max(1, rawScenes));
+    console.log(`Target scenes: ${targetScenes} (max 10, aiming for ${Math.round((audioDuration || 60) / targetScenes / 60)} min each)`);
 
-    const systemPrompt = `You are a video scene breakdown expert. Your job is to break down narration transcripts into visual scenes for video production.
+    const systemPrompt = `You are a video scene breakdown expert for long-form storytelling. Your job is to break down narration transcripts into MEANINGFUL story scenes.
 
-For each scene, you must provide:
-1. A scene number (starting from 1)
-2. Approximate start and end timestamps (in seconds)
-3. The exact narration text for that scene
-4. A detailed visual prompt for AI image generation (Midjourney style)
+CRITICAL RULES:
+- Create a MAXIMUM of ${targetScenes} scenes (fewer is better if natural)
+- Each scene should represent a MAJOR story beat, theme change, or narrative shift
+- Scenes should be 5-20 MINUTES long for 1.5-2 hour stories
+- DO NOT create scenes for every paragraph - combine related content into cohesive scenes
+
+For each scene, provide:
+1. Scene number (starting from 1)
+2. Start and end timestamps (in seconds) - these should cover LONG durations
+3. The narration text for that scene (can be long - multiple paragraphs)
+4. A detailed visual prompt for the MAIN imagery of that scene
 
 Guidelines for visual prompts:
 - Be specific and descriptive (lighting, mood, composition, style)
@@ -46,6 +53,7 @@ Guidelines for visual prompts:
 - Include atmosphere details (dark, moody, dramatic, ethereal)
 - Mention art style when appropriate (photorealistic, cinematic, illustration)
 - Keep prompts 50-100 words each
+- Focus on the CORE visual theme of the scene
 
 Return ONLY valid JSON in this exact format:
 {
@@ -53,23 +61,28 @@ Return ONLY valid JSON in this exact format:
     {
       "scene_number": 1,
       "start_time": 0,
-      "end_time": 12.5,
-      "narration": "The exact text from the transcript for this scene",
-      "visual_prompt": "Detailed visual description for image generation"
+      "end_time": 600,
+      "narration": "The combined narration text for this entire scene segment",
+      "visual_prompt": "Detailed visual description for the primary image of this scene"
     }
   ]
 }`;
 
-    const userPrompt = `Break down this narration into approximately ${targetScenes} visual scenes. The total audio duration is ${audioDuration} seconds.
+    const userPrompt = `Break down this ${Math.round((audioDuration || 0) / 60)} minute narration into EXACTLY ${targetScenes} or fewer scenes.
+
+CRITICAL REQUIREMENTS:
+- Maximum ${targetScenes} scenes (NEVER more)
+- Each scene should be ${Math.round((audioDuration || 60) / targetScenes / 60)}-${Math.round((audioDuration || 60) / targetScenes / 60) + 5} minutes long minimum
+- Split ONLY at major story beats, theme changes, or narrative shifts
+- Combine paragraphs that share the same topic/theme into ONE scene
 
 TRANSCRIPT:
 ${transcript}
 
 Remember:
-- Scenes should flow naturally with the narration
-- Each scene should be 2-4 MINUTES long (120-240 seconds) - this is CRITICAL
-- Visual prompts should be vivid and specific
-- Combine related content into longer cohesive scenes
+- Fewer, longer scenes are better than many short scenes
+- Each scene represents a CHAPTER or MAJOR SECTION of the story
+- Visual prompts should capture the essence/mood of that entire section
 - Return ONLY the JSON, no other text`;
 
     console.log('Calling Lovable AI...');
