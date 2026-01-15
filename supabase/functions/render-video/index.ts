@@ -157,13 +157,19 @@ async function processRender(
       }
     }
 
-    // Step 1: Collect existing images/videos - including multiple images per scene
+    // Step 1: Collect existing images/videos - including multiple images per scene with custom durations
     console.log(`[BG] Processing ${scenes.length} scenes for media...`);
     const mediaResults = scenes.map((scene: any, i: number) => {
       // Prefer video_url over images
       if (scene.video_url) {
         console.log(`[BG] Scene ${i + 1} has video: ${scene.video_url}`);
-        return { index: i, urls: [scene.video_url], type: 'video', duration: Number(scene.end_time) - Number(scene.start_time) };
+        return { 
+          index: i, 
+          urls: [scene.video_url], 
+          type: 'video', 
+          duration: Number(scene.end_time) - Number(scene.start_time),
+          imageDurations: [] as number[]
+        };
       }
       
       // Collect all images for the scene (image_urls array + image_url)
@@ -175,13 +181,24 @@ async function processRender(
         sceneImages.unshift(scene.image_url);
       }
       
+      // Get custom durations if available
+      const imageDurations: number[] = scene.image_durations && Array.isArray(scene.image_durations) 
+        ? scene.image_durations 
+        : [];
+      
       if (sceneImages.length > 0) {
-        console.log(`[BG] Scene ${i + 1} has ${sceneImages.length} image(s)`);
-        return { index: i, urls: sceneImages, type: 'image', duration: Number(scene.end_time) - Number(scene.start_time) };
+        console.log(`[BG] Scene ${i + 1} has ${sceneImages.length} image(s) with durations: ${JSON.stringify(imageDurations)}`);
+        return { 
+          index: i, 
+          urls: sceneImages, 
+          type: 'image', 
+          duration: Number(scene.end_time) - Number(scene.start_time),
+          imageDurations
+        };
       }
       
       console.log(`[BG] Scene ${i + 1} has no media`);
-      return { index: i, urls: [], type: null, duration: 0 };
+      return { index: i, urls: [], type: null, duration: 0, imageDurations: [] as number[] };
     });
 
     const sortedMedia = mediaResults.sort((a, b) => a.index - b.index);
@@ -280,9 +297,10 @@ async function processRender(
       const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
       const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
 
-      // Build image sequence with proper timing
+      // Build image sequence with proper timing - now supporting custom durations per image
       // For Ken Burns, we use shorter duration per image with more images to create dynamic movement
       const imagesForSlideshow: string[] = [];
+      const imageDurationsForSlideshow: number[] = [];
       const KEN_BURNS_CYCLE_DURATION = 8; // Each image gets 8 seconds with Ken Burns effect
       
       for (const sceneMedia of sortedMedia) {
@@ -290,22 +308,25 @@ async function processRender(
         
         const sceneDuration = sceneMedia.duration;
         const imagesInScene = sceneMedia.urls;
+        const customDurations = sceneMedia.imageDurations || [];
         
-        if (imagesInScene.length === 1) {
-          // Single image - repeat it with Ken Burns cycles
-          const repeats = Math.max(1, Math.ceil(sceneDuration / KEN_BURNS_CYCLE_DURATION));
+        // Calculate default duration (evenly split) for images without custom duration
+        const defaultDuration = sceneDuration / imagesInScene.length;
+        
+        for (let imgIdx = 0; imgIdx < imagesInScene.length; imgIdx++) {
+          const img = imagesInScene[imgIdx];
+          // Use custom duration if set (> 0), otherwise use default
+          const imgDuration = (customDurations[imgIdx] && customDurations[imgIdx] > 0) 
+            ? customDurations[imgIdx] 
+            : defaultDuration;
+          
+          // Add image with potential repeats for Ken Burns cycles
+          const repeats = Math.max(1, Math.ceil(imgDuration / KEN_BURNS_CYCLE_DURATION));
+          const durationPerRepeat = imgDuration / repeats;
+          
           for (let r = 0; r < repeats; r++) {
-            imagesForSlideshow.push(imagesInScene[0]);
-          }
-        } else {
-          // Multiple images - distribute them across scene duration
-          const durationPerImage = sceneDuration / imagesInScene.length;
-          for (const img of imagesInScene) {
-            // Add each image with potential repeats for Ken Burns cycles
-            const repeats = Math.max(1, Math.ceil(durationPerImage / KEN_BURNS_CYCLE_DURATION));
-            for (let r = 0; r < repeats; r++) {
-              imagesForSlideshow.push(img);
-            }
+            imagesForSlideshow.push(img);
+            imageDurationsForSlideshow.push(durationPerRepeat);
           }
         }
       }
