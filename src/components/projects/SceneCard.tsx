@@ -405,12 +405,12 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
                       </div>
                       
                       <div className="p-3 space-y-3">
-                        {/* Part content */}
-                        <ScrollArea className="max-h-24">
-                          <p className="text-sm text-muted-foreground leading-relaxed">
+                        {/* Part content - full narration, no truncation */}
+                        <div className="bg-muted/30 rounded-md p-3">
+                          <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">
                             "{part.content}"
                           </p>
-                        </ScrollArea>
+                        </div>
                         
                         {/* Visual prompt */}
                         <div className="bg-primary/5 border border-primary/20 rounded-md p-2">
