@@ -137,6 +137,7 @@ export type Database = {
           created_at: string
           end_time: number
           id: string
+          image_durations: number[] | null
           image_url: string | null
           image_urls: string[] | null
           narration: string
@@ -153,6 +154,7 @@ export type Database = {
           created_at?: string
           end_time: number
           id?: string
+          image_durations?: number[] | null
           image_url?: string | null
           image_urls?: string[] | null
           narration: string
@@ -169,6 +171,7 @@ export type Database = {
           created_at?: string
           end_time?: number
           id?: string
+          image_durations?: number[] | null
           image_url?: string | null
           image_urls?: string[] | null
           narration?: string

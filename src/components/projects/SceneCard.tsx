@@ -1,22 +1,21 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   ChevronDown,
   ChevronRight,
   Image,
   Video,
   Upload,
-  Copy,
-  Check,
+  Clock,
   ImageIcon,
   Plus,
   X,
-  GripVertical,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Scene, TransitionType } from "@/types/project";
@@ -24,7 +23,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 interface SceneCardProps {
-  scene: Scene & { image_urls?: string[] };
+  scene: Scene & { image_urls?: string[]; image_durations?: number[] };
   isExpanded: boolean;
   onToggle: () => void;
   onUpdate: () => void;
@@ -50,11 +49,9 @@ function formatTime(seconds: number): string {
 }
 
 export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, isThumbnailScene, onSetThumbnail }: SceneCardProps) {
-  const [visualPrompt, setVisualPrompt] = useState(scene.visual_prompt || "");
   const [transition, setTransition] = useState<TransitionType>(scene.transition);
-  const [copied, setCopied] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [imageDurations, setImageDurations] = useState<number[]>(scene.image_durations || []);
 
   // Get all images (combine image_url with image_urls array)
   const getAllImages = (): string[] => {
@@ -69,31 +66,12 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
   };
 
   const allImages = getAllImages();
+  const sceneDuration = scene.end_time - scene.start_time;
 
-  const handleCopyPrompt = async () => {
-    if (visualPrompt) {
-      await navigator.clipboard.writeText(visualPrompt);
-      setCopied(true);
-      toast.success("Prompt copied to clipboard");
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
-  const handleSavePrompt = async () => {
-    setSaving(true);
-    try {
-      const { error } = await supabase
-        .from("scenes")
-        .update({ visual_prompt: visualPrompt })
-        .eq("id", scene.id);
-
-      if (error) throw error;
-      toast.success("Prompt saved");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to save prompt");
-    } finally {
-      setSaving(false);
-    }
+  // Calculate default duration per image (evenly distributed)
+  const getDefaultDuration = (imageCount: number) => {
+    if (imageCount === 0) return 0;
+    return sceneDuration / imageCount;
   };
 
   const handleTransitionChange = async (value: TransitionType) => {
@@ -134,6 +112,11 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
       if (!scene.image_url) {
         updateData.image_url = newImageUrl;
       }
+      
+      // Add default duration for new image
+      const newDurations = [...imageDurations, 0]; // 0 means "auto"
+      updateData.image_durations = newDurations;
+      setImageDurations(newDurations);
 
       const { error: updateError } = await supabase
         .from("scenes")
@@ -151,12 +134,19 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
     }
   };
 
-  const handleRemoveImage = async (imageUrl: string) => {
+  const handleRemoveImage = async (imageUrl: string, index: number) => {
     try {
       const currentUrls = scene.image_urls || [];
       const updatedUrls = currentUrls.filter(url => url !== imageUrl);
       
-      const updateData: any = { image_urls: updatedUrls };
+      // Remove duration for this image
+      const newDurations = [...imageDurations];
+      newDurations.splice(index, 1);
+      
+      const updateData: any = { 
+        image_urls: updatedUrls,
+        image_durations: newDurations
+      };
       
       // If removing the primary image, set first remaining as primary
       if (scene.image_url === imageUrl) {
@@ -170,10 +160,28 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
 
       if (error) throw error;
 
+      setImageDurations(newDurations);
       toast.success("Image removed");
       onUpdate();
     } catch (error: any) {
       toast.error(error.message || "Failed to remove image");
+    }
+  };
+
+  const handleDurationChange = async (index: number, duration: number) => {
+    const newDurations = [...imageDurations];
+    newDurations[index] = duration;
+    setImageDurations(newDurations);
+    
+    try {
+      const { error } = await supabase
+        .from("scenes")
+        .update({ image_durations: newDurations })
+        .eq("id", scene.id);
+
+      if (error) throw error;
+    } catch (error: any) {
+      toast.error(error.message || "Failed to save duration");
     }
   };
 
@@ -314,50 +322,17 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
               )}
             </div>
 
-            {/* Narration Text */}
+            {/* Narration Text - Scrollable */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Narration</label>
-              <div className="text-sm text-muted-foreground bg-muted/50 rounded-md p-3 max-h-32 overflow-y-auto">
-                {scene.narration}
-              </div>
-            </div>
-
-            {/* Visual Prompt */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium text-foreground">Visual Prompt</label>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleCopyPrompt}
-                    disabled={!visualPrompt}
-                  >
-                    {copied ? (
-                      <Check className="h-4 w-4 text-green-400" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleSavePrompt}
-                    disabled={saving || visualPrompt === scene.visual_prompt}
-                  >
-                    {saving ? "Saving..." : "Save"}
-                  </Button>
+              <ScrollArea className="h-48 rounded-md border border-border bg-muted/50">
+                <div className="p-3 text-sm text-muted-foreground whitespace-pre-wrap">
+                  {scene.narration}
                 </div>
-              </div>
-              <Textarea
-                value={visualPrompt}
-                onChange={(e) => setVisualPrompt(e.target.value)}
-                placeholder="Enter visual prompt for image generation..."
-                className="bg-background border-border min-h-[80px]"
-              />
+              </ScrollArea>
             </div>
 
-            {/* Multiple Images Section */}
+            {/* Multiple Images Section with Duration Controls */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium text-foreground">
@@ -384,44 +359,74 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
               </div>
 
               {allImages.length > 0 ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                  {allImages.map((url, idx) => (
-                    <div
-                      key={idx}
-                      className={`relative aspect-video rounded-lg overflow-hidden border-2 ${
-                        url === scene.image_url ? "border-primary" : "border-border"
-                      } group`}
-                    >
-                      <img
-                        src={url}
-                        alt={`Scene ${scene.scene_number} image ${idx + 1}`}
-                        className="w-full h-full object-cover"
-                      />
-                      {url === scene.image_url && (
-                        <Badge className="absolute top-1 left-1 text-xs" variant="default">
-                          Primary
-                        </Badge>
-                      )}
-                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                        {url !== scene.image_url && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => handleSetPrimaryImage(url)}
-                          >
-                            Set Primary
-                          </Button>
-                        )}
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => handleRemoveImage(url)}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
+                <div className="space-y-3">
+                  {allImages.map((url, idx) => {
+                    const customDuration = imageDurations[idx] || 0;
+                    const displayDuration = customDuration > 0 ? customDuration : getDefaultDuration(allImages.length);
+                    
+                    return (
+                      <div key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 border border-border">
+                        {/* Image thumbnail */}
+                        <div className={`relative w-32 h-20 rounded overflow-hidden border-2 flex-shrink-0 ${
+                          url === scene.image_url ? "border-primary" : "border-border"
+                        }`}>
+                          <img
+                            src={url}
+                            alt={`Scene ${scene.scene_number} image ${idx + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                          {url === scene.image_url && (
+                            <Badge className="absolute top-1 left-1 text-xs" variant="default">
+                              Primary
+                            </Badge>
+                          )}
+                        </div>
+                        
+                        {/* Duration control */}
+                        <div className="flex-1 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Clock className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-sm text-muted-foreground">Duration:</span>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="1"
+                              placeholder="Auto"
+                              value={customDuration > 0 ? customDuration : ""}
+                              onChange={(e) => handleDurationChange(idx, parseFloat(e.target.value) || 0)}
+                              className="w-20 h-8 text-sm"
+                            />
+                            <span className="text-xs text-muted-foreground">
+                              sec {customDuration === 0 && `(auto: ${displayDuration.toFixed(1)}s)`}
+                            </span>
+                          </div>
+                          
+                          {/* Actions */}
+                          <div className="flex items-center gap-2">
+                            {url !== scene.image_url && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleSetPrimaryImage(url)}
+                                className="h-7 text-xs"
+                              >
+                                Set Primary
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleRemoveImage(url, idx)}
+                              className="h-7 text-xs text-destructive hover:text-destructive"
+                            >
+                              <X className="h-3 w-3 mr-1" />
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <label className="flex flex-col items-center justify-center aspect-video max-w-md rounded-lg border-2 border-dashed border-border hover:border-primary/50 cursor-pointer transition-colors bg-muted/30">
