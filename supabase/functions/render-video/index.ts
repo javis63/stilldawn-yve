@@ -293,51 +293,65 @@ async function processRender(
       }
     } else if (scenesWithImage.length > 0) {
       // Only images - create slideshow with Ken Burns effect
-      // Each image gets its duration calculated based on scene timing
+      // Replicate model has a MAX of 10 seconds per image, so we need to repeat images
+      const MAX_DURATION_PER_IMAGE = 10; // Replicate API limit
+      const MAX_SLIDESHOW_IMAGES = 50; // Replicate model limit
+      
       const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
       const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
 
-      // Build image sequence - NO REPEATING, each unique image appears once
-      // Replicate slideshow has a max of 50 images
-      const MAX_SLIDESHOW_IMAGES = 50;
-      const imagesForSlideshow: string[] = [];
-      
-      // Collect all unique images from all scenes (no repeating)
+      // Collect all unique images from all scenes
+      const uniqueImages: string[] = [];
       for (const sceneMedia of sortedMedia) {
         if (sceneMedia.type !== 'image' || sceneMedia.urls.length === 0) continue;
-        
         for (const img of sceneMedia.urls) {
-          // Don't add duplicates, and respect max limit
-          if (!imagesForSlideshow.includes(img) && imagesForSlideshow.length < MAX_SLIDESHOW_IMAGES) {
-            imagesForSlideshow.push(img);
+          if (!uniqueImages.includes(img)) {
+            uniqueImages.push(img);
           }
         }
       }
 
-      // Ensure minimum of 2 images (required by slideshow model)
-      while (imagesForSlideshow.length < 2 && allImageUrls[0]) {
-        imagesForSlideshow.push(allImageUrls[0]);
+      // Ensure minimum of 1 unique image
+      if (uniqueImages.length === 0 && allImageUrls[0]) {
+        uniqueImages.push(allImageUrls[0]);
       }
 
-      // Calculate duration per image: total video duration / number of images
-      // For a 10-min video with 4 images = 150 seconds per image
-      const durationPerImage = Math.max(3, Math.ceil(targetDurationSec / imagesForSlideshow.length));
+      // Calculate how to fill the target duration with max 10s per image slot
+      // Total slots needed = targetDuration / MAX_DURATION_PER_IMAGE
+      const slotsNeeded = Math.ceil(targetDurationSec / MAX_DURATION_PER_IMAGE);
       
-      console.log(`[BG] Unique images: ${imagesForSlideshow.length}, duration per image: ${durationPerImage}s, total target: ${targetDurationSec}s`);
+      // Build image sequence by cycling through unique images to fill slots
+      const imagesForSlideshow: string[] = [];
+      for (let i = 0; i < Math.min(slotsNeeded, MAX_SLIDESHOW_IMAGES); i++) {
+        imagesForSlideshow.push(uniqueImages[i % uniqueImages.length]);
+      }
 
-      console.log(`[BG] Ken Burns Slideshow: ${imagesForSlideshow.length} frames, ${durationPerImage.toFixed(1)}s each, target: ${targetDurationSec}s`);
+      // Ensure minimum of 2 images (required by slideshow model)
+      while (imagesForSlideshow.length < 2 && uniqueImages[0]) {
+        imagesForSlideshow.push(uniqueImages[0]);
+      }
+
+      // Calculate actual duration per image (capped at 10s)
+      const durationPerImage = Math.min(
+        MAX_DURATION_PER_IMAGE,
+        Math.max(3, Math.ceil(targetDurationSec / imagesForSlideshow.length))
+      );
+      
+      console.log(`[BG] Unique images: ${uniqueImages.length}, slots: ${imagesForSlideshow.length}, duration per slot: ${durationPerImage}s, total target: ${targetDurationSec}s`);
+
+      console.log(`[BG] Ken Burns Slideshow: ${imagesForSlideshow.length} frames, ${durationPerImage}s each, actual: ${imagesForSlideshow.length * durationPerImage}s`);
 
       const slideshowOut = await replicate.run(
         "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
         {
           input: {
             images: imagesForSlideshow,
-            duration_per_image: Math.round(durationPerImage),
+            duration_per_image: durationPerImage,
             frame_rate: 30,
             resolution: "1080p",
             aspect_ratio: "auto",
-            transition_type: "fade", // Smooth transitions between Ken Burns cycles
-            zoom_pan: true, // Enable Ken Burns effect
+            transition_type: "fade",
+            zoom_pan: true,
           },
         }
       );
