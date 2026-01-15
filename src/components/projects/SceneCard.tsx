@@ -609,47 +609,11 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
               )}
             </div>
 
-            {/* Video Upload (Optional) */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Video (Optional - overrides images)</label>
-              {scene.video_url ? (
-                <div className="relative aspect-video max-w-md rounded-lg overflow-hidden border border-border">
-                  <video
-                    src={scene.video_url}
-                    className="w-full h-full object-cover"
-                    muted
-                    controls
-                  />
-                  <label className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 hover:opacity-100 transition-opacity cursor-pointer">
-                    <Upload className="h-6 w-6 text-white" />
-                    <input
-                      type="file"
-                      accept="video/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        if (e.target.files?.[0]) {
-                          handleVideoUpload(e.target.files[0]);
-                        }
-                      }}
-                    />
-                  </label>
-                </div>
-              ) : (
-                <label className="flex flex-col items-center justify-center aspect-video max-w-md rounded-lg border-2 border-dashed border-border hover:border-primary/50 cursor-pointer transition-colors bg-muted/30">
-                  <Video className="h-8 w-8 text-muted-foreground mb-2" />
-                  <span className="text-sm text-muted-foreground">Upload Video</span>
-                  <input
-                    type="file"
-                    accept="video/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files?.[0]) {
-                        handleVideoUpload(e.target.files[0]);
-                      }
-                    }}
-                  />
-                </label>
-              )}
+            {/* Info about Ken Burns effect */}
+            <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-3">
+              <p className="text-sm text-green-600 dark:text-green-400">
+                <strong>✓ Ken Burns Effect:</strong> Your images will have smooth pan/zoom animation during playback.
+              </p>
             </div>
           </CardContent>
         </CollapsibleContent>
