@@ -548,22 +548,64 @@ async function processRender(
 
     // ========================================================================
     // PHASE 3: SEGMENTED FFMPEG PIPELINE
-    // Process images in segments of 4, then concatenate, then mux audio+subs
+    // Process images in TIME-BASED segments (max 30s per segment) to avoid
+    // Replicate upload failures on large output files
     // ========================================================================
     
     await updateProgress('Starting segmented FFmpeg pipeline (Ken Burns)...');
     
-    const IMAGES_PER_SEGMENT = 4;
-    const segments: Array<{ images: typeof imageList }> = [];
+    // Split images into time-based segments (max 30 seconds each to keep output small)
+    const MAX_SEGMENT_DURATION = 30; // seconds - keeps output files small enough for Replicate
+    const MAX_IMAGES_PER_SEGMENT = 4; // cog-ffmpeg limit
     
-    // Split images into segments
-    for (let i = 0; i < imageList.length; i += IMAGES_PER_SEGMENT) {
-      segments.push({
-        images: imageList.slice(i, i + IMAGES_PER_SEGMENT),
-      });
+    interface ImageSegment {
+      images: Array<{ url: string; duration: number }>;
+      totalDuration: number;
     }
     
-    console.log(`[BG] Split into ${segments.length} segments (max ${IMAGES_PER_SEGMENT} images each)`);
+    const segments: ImageSegment[] = [];
+    let currentSegment: ImageSegment = { images: [], totalDuration: 0 };
+    
+    for (const img of imageList) {
+      // If this image is longer than MAX_SEGMENT_DURATION, we need to split it
+      // into multiple virtual "sub-images" with the same URL but shorter duration
+      let remainingDuration = img.duration;
+      
+      while (remainingDuration > 0) {
+        const spaceInCurrentSegment = MAX_SEGMENT_DURATION - currentSegment.totalDuration;
+        const canFitImages = currentSegment.images.length < MAX_IMAGES_PER_SEGMENT;
+        
+        if (spaceInCurrentSegment <= 0 || !canFitImages) {
+          // Current segment is full, start a new one
+          if (currentSegment.images.length > 0) {
+            segments.push(currentSegment);
+          }
+          currentSegment = { images: [], totalDuration: 0 };
+        }
+        
+        // Calculate how much of this image fits in current segment
+        const durationToUse = Math.min(remainingDuration, MAX_SEGMENT_DURATION - currentSegment.totalDuration);
+        
+        if (durationToUse > 0) {
+          currentSegment.images.push({
+            url: img.url,
+            duration: durationToUse,
+          });
+          currentSegment.totalDuration += durationToUse;
+          remainingDuration -= durationToUse;
+        }
+      }
+    }
+    
+    // Don't forget the last segment
+    if (currentSegment.images.length > 0) {
+      segments.push(currentSegment);
+    }
+    
+    console.log(`[BG] Split into ${segments.length} time-based segments (max ${MAX_SEGMENT_DURATION}s each)`);
+    for (let i = 0; i < segments.length; i++) {
+      console.log(`[BG]   Segment ${i + 1}: ${segments[i].images.length} images, ${segments[i].totalDuration.toFixed(1)}s`);
+    }
     
     // Process each segment
     const segmentVideos: string[] = [];
@@ -573,7 +615,7 @@ async function processRender(
       const imageCount = segment.images.length;
       const durations = segment.images.map(img => img.duration);
       
-      await updateProgress(`Rendering segment ${segIdx + 1}/${segments.length} (${imageCount} images)...`);
+      await updateProgress(`Rendering segment ${segIdx + 1}/${segments.length} (${imageCount} images, ${segment.totalDuration.toFixed(0)}s)...`);
       
       // Build FFmpeg command for this segment
       const command = buildSegmentFfmpegCommand(imageCount, durations, 30);
