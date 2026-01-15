@@ -24,11 +24,8 @@ async function generateTTSAudio(
   try {
     console.log(`[TTS] Generating audio for ${text.length} characters...`);
     
-    // OpenAI TTS has a 4096 character limit per request, so we need to chunk
     const maxChunkSize = 4000;
     const chunks: string[] = [];
-    
-    // Split text into chunks at sentence boundaries
     const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
     let currentChunk = '';
     
@@ -44,7 +41,6 @@ async function generateTTSAudio(
     
     console.log(`[TTS] Split into ${chunks.length} chunks`);
     
-    // Generate audio for each chunk
     const audioBuffers: ArrayBuffer[] = [];
     
     for (let i = 0; i < chunks.length; i++) {
@@ -59,7 +55,7 @@ async function generateTTSAudio(
         body: JSON.stringify({
           model: 'tts-1',
           input: chunks[i],
-          voice: 'onyx', // Natural, warm male voice
+          voice: 'onyx',
           response_format: 'mp3',
           speed: 1.0,
         }),
@@ -76,7 +72,6 @@ async function generateTTSAudio(
       console.log(`[TTS] Chunk ${i + 1} complete: ${audioBuffer.byteLength} bytes`);
     }
 
-    // Combine all audio buffers
     const totalLength = audioBuffers.reduce((acc, buf) => acc + buf.byteLength, 0);
     const combinedBuffer = new Uint8Array(totalLength);
     let offset = 0;
@@ -86,7 +81,6 @@ async function generateTTSAudio(
       offset += buffer.byteLength;
     }
 
-    // Upload to storage
     const audioFileName = `${projectId}/${renderId}_tts.mp3`;
     const { error: uploadError } = await supabase.storage
       .from('renders')
@@ -102,7 +96,6 @@ async function generateTTSAudio(
 
     const { data: publicUrl } = supabase.storage.from('renders').getPublicUrl(audioFileName);
     
-    // Estimate duration: ~150 words per minute, average 5 chars per word
     const wordCount = text.split(/\s+/).length;
     const estimatedDuration = (wordCount / 150) * 60;
     
@@ -137,7 +130,6 @@ Style: Default,Arial,56,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-  // Convert seconds to ASS time format (H:MM:SS.cc)
   const formatAssTime = (seconds: number): string => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -149,7 +141,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   if (wordTimestamps && wordTimestamps.length > 0) {
     console.log('[ASS] Generating from word timestamps');
     
-    // Group words into subtitle chunks (4-8 words or ~50 chars max)
     const maxWordsPerChunk = 7;
     const maxCharsPerChunk = 50;
     
@@ -162,7 +153,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       
       const newText = currentText + (currentText ? ' ' : '') + word;
       
-      // Check if we should start a new chunk
       if (currentWords.length >= maxWordsPerChunk || newText.length > maxCharsPerChunk) {
         if (currentWords.length > 0) {
           const startTime = formatAssTime(currentWords[0].start);
@@ -178,7 +168,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       }
     }
     
-    // Output final chunk
     if (currentWords.length > 0) {
       const startTime = formatAssTime(currentWords[0].start);
       const endTime = formatAssTime(currentWords[currentWords.length - 1].end);
@@ -187,7 +176,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   } else {
     console.log('[ASS] Fallback to scene-based subtitles');
     
-    // Fallback: use scene-based subtitles
     for (const scene of scenes) {
       const sceneStart = scene.start_time || 0;
       const sceneEnd = scene.end_time || sceneStart + 5;
@@ -222,7 +210,175 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   return assContent;
 }
 
-// Background render processing function - IMAGES ONLY with Ken Burns
+// Build FFmpeg command for Ken Burns slideshow with subtitles
+function buildFfmpegCommand(
+  imageUrls: string[],
+  durations: number[],
+  audioUrl: string | null,
+  assUrl: string | null,
+  fps: number = 30
+): string {
+  const totalImages = imageUrls.length;
+  
+  // Build input section - download images and audio via URLs
+  let inputSection = '';
+  let inputIndex = 0;
+  
+  // Add each image as an input with loop
+  for (let i = 0; i < totalImages; i++) {
+    const duration = durations[i];
+    inputSection += `-loop 1 -t ${duration} -i "${imageUrls[i]}" `;
+    inputIndex++;
+  }
+  
+  // Add audio if available
+  const audioInputIndex = audioUrl ? inputIndex : -1;
+  if (audioUrl) {
+    inputSection += `-i "${audioUrl}" `;
+    inputIndex++;
+  }
+  
+  // Add ASS subtitles if available
+  const assInputIndex = assUrl ? inputIndex : -1;
+  if (assUrl) {
+    inputSection += `-i "${assUrl}" `;
+    inputIndex++;
+  }
+  
+  // Build filter complex for Ken Burns + transitions
+  let filterComplex = '';
+  const videoLabels: string[] = [];
+  
+  for (let i = 0; i < totalImages; i++) {
+    const duration = durations[i];
+    const frames = Math.ceil(duration * fps);
+    
+    // Ultra-slow Ken Burns: alternate between zoom-in and zoom-out
+    // Zoom increment of 0.0002 per frame = very slow, cinematic zoom
+    const isZoomIn = i % 2 === 0;
+    let zoomExpr: string;
+    
+    if (isZoomIn) {
+      // Zoom in: start at 1.0, slowly zoom to 1.2 (20% zoom)
+      zoomExpr = `'min(zoom+0.0002,1.2)'`;
+    } else {
+      // Zoom out: start at 1.2, slowly zoom back to 1.0
+      zoomExpr = `'if(lte(zoom,1.0),1.2,max(1.0,zoom-0.0002))'`;
+    }
+    
+    // Ken Burns zoompan with crossfade transitions
+    const fadeOutStart = Math.max(0, duration - 0.5);
+    const fadeInDuration = i > 0 ? `,fade=t=in:d=0.5` : '';
+    const fadeOutDuration = i < totalImages - 1 ? `,fade=t=out:st=${fadeOutStart}:d=0.5` : '';
+    
+    filterComplex += `[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:black,zoompan=z=${zoomExpr}:d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080:fps=${fps}${fadeInDuration}${fadeOutDuration}[v${i}]; `;
+    videoLabels.push(`[v${i}]`);
+  }
+  
+  // Concatenate all video streams
+  filterComplex += `${videoLabels.join('')}concat=n=${totalImages}:v=1:a=0[slideshow]`;
+  
+  // Apply subtitles if available
+  if (assUrl) {
+    // Use subtitles filter with the ASS file URL
+    filterComplex += `; [slideshow]subtitles='${assUrl}':force_style='FontName=Arial,FontSize=56,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=3,Bold=1'[final]`;
+  } else {
+    filterComplex += `; [slideshow]copy[final]`;
+  }
+  
+  // Build output section
+  let outputSection = `-map "[final]" `;
+  
+  // Add audio mapping
+  if (audioInputIndex >= 0) {
+    outputSection += `-map ${audioInputIndex}:a `;
+  }
+  
+  // Encoding settings for proper seeking (keyframes every 30 frames)
+  outputSection += `-c:v libx264 -preset medium -crf 23 -g 30 -keyint_min 30 `;
+  outputSection += `-c:a aac -b:a 192k `;
+  outputSection += `-movflags +faststart `;
+  outputSection += `-shortest `;
+  outputSection += `-y output.mp4`;
+  
+  const fullCommand = `ffmpeg ${inputSection}-filter_complex "${filterComplex}" ${outputSection}`;
+  
+  return fullCommand;
+}
+
+// Simplified FFmpeg command that works with cog-ffmpeg file inputs
+function buildSimpleFfmpegCommand(
+  numImages: number,
+  durations: number[],
+  hasAudio: boolean,
+  hasSubtitles: boolean,
+  fps: number = 30
+): { command: string; fileMapping: string } {
+  // cog-ffmpeg supports file1, file2, file3, file4 as inputs
+  // We'll pass: file1=concat list, file2=audio, file3=subtitles manifest
+  
+  // For Ken Burns, we need to process each image individually
+  // Since we can't use URLs directly, we'll use a different approach:
+  // Create a manifest and let FFmpeg handle it
+  
+  let filterComplex = '';
+  const videoLabels: string[] = [];
+  
+  for (let i = 0; i < numImages; i++) {
+    const duration = durations[i];
+    const frames = Math.ceil(duration * fps);
+    
+    // Alternate Ken Burns direction
+    const isZoomIn = i % 2 === 0;
+    let zoomExpr: string;
+    
+    if (isZoomIn) {
+      zoomExpr = `'min(zoom+0.0002,1.2)'`;
+    } else {
+      zoomExpr = `'if(lte(zoom,1.0),1.2,max(1.0,zoom-0.0002))'`;
+    }
+    
+    const fadeOutStart = Math.max(0, duration - 0.5);
+    const fadeInDuration = i > 0 ? `,fade=t=in:d=0.5` : '';
+    const fadeOutDuration = i < numImages - 1 ? `,fade=t=out:st=${fadeOutStart}:d=0.5` : '';
+    
+    // Reference images as img_0.jpg, img_1.jpg, etc. (will be downloaded by wrapper script)
+    filterComplex += `[${i}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:black,zoompan=z=${zoomExpr}:d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080:fps=${fps}${fadeInDuration}${fadeOutDuration}[v${i}]; `;
+    videoLabels.push(`[v${i}]`);
+  }
+  
+  filterComplex += `${videoLabels.join('')}concat=n=${numImages}:v=1:a=0[slideshow]`;
+  
+  // Add subtitles filter
+  if (hasSubtitles) {
+    filterComplex += `; [slideshow]ass=subtitles.ass[final]`;
+  } else {
+    filterComplex += `; [slideshow]copy[final]`;
+  }
+  
+  // Build the command
+  let inputs = '';
+  for (let i = 0; i < numImages; i++) {
+    inputs += `-loop 1 -t ${durations[i]} -i img_${i}.jpg `;
+  }
+  
+  const audioIndex = numImages;
+  if (hasAudio) {
+    inputs += `-i audio.mp3 `;
+  }
+  
+  let output = `-map "[final]" `;
+  if (hasAudio) {
+    output += `-map ${audioIndex}:a `;
+  }
+  output += `-c:v libx264 -preset medium -crf 23 -g 30 -keyint_min 30 -c:a aac -b:a 192k -movflags +faststart -shortest -y output.mp4`;
+  
+  const command = `${inputs}-filter_complex "${filterComplex}" ${output}`;
+  
+  return { command, fileMapping: 'See manifest' };
+}
+
+// Background render processing function - IMAGES ONLY with Ken Burns via FFmpeg
 async function processRender(
   projectId: string,
   scenes: any[],
@@ -261,7 +417,7 @@ async function processRender(
       }
     }
 
-    // Step 1: Collect ALL images from ALL scenes (NO VIDEO SUPPORT - images only)
+    // Step 1: Collect ALL images from ALL scenes
     console.log(`[BG] Processing ${scenes.length} scenes for images...`);
     
     const allImages: Array<{
@@ -275,7 +431,6 @@ async function processRender(
       const scene = scenes[i];
       const sceneImages: string[] = [];
       
-      // Collect all images for the scene
       if (scene.image_urls && Array.isArray(scene.image_urls)) {
         sceneImages.push(...scene.image_urls);
       }
@@ -283,7 +438,6 @@ async function processRender(
         sceneImages.unshift(scene.image_url);
       }
       
-      // Get custom durations if available
       const imageDurations: number[] = scene.image_durations && Array.isArray(scene.image_durations) 
         ? scene.image_durations 
         : [];
@@ -314,7 +468,6 @@ async function processRender(
     console.log(`[BG] Target duration: ${targetDurationSec}s`);
 
     // Calculate duration per image
-    // Use custom durations where specified, auto-calculate for the rest
     let totalCustomDuration = 0;
     let imagesWithCustomDuration = 0;
     
@@ -339,121 +492,13 @@ async function processRender(
     
     console.log(`[BG] Image durations calculated. Custom: ${imagesWithCustomDuration}, Auto: ${imagesWithoutCustomDuration} @ ${autoDurationPerImage.toFixed(1)}s each`);
 
-    // Step 2: Generate video using Replicate slideshow with zoom_pan (Ken Burns)
-    // The lucataco/image-to-video-slideshow model has zoom_pan option for Ken Burns effect
-    const MAX_DURATION_PER_IMAGE = 10; // Replicate API limit
-    const MAX_SLIDESHOW_IMAGES = 50; // Replicate model limit
-    
-    // Clamp durations to max 10s per image
-    const clampedImageList = imageList.map(img => ({
-      url: img.url,
-      duration: Math.min(img.duration, MAX_DURATION_PER_IMAGE),
-    }));
-    
-    // Calculate how many slideshow calls we need
-    const totalClampedDuration = clampedImageList.reduce((acc, img) => acc + img.duration, 0);
-    const avgDuration = totalClampedDuration / clampedImageList.length;
-    
-    // Split into chunks if needed
-    const chunksNeeded = Math.ceil(clampedImageList.length / MAX_SLIDESHOW_IMAGES);
-    const imagesPerChunk = Math.ceil(clampedImageList.length / chunksNeeded);
-    
-    console.log(`[BG] Creating ${chunksNeeded} slideshow chunk(s) with Ken Burns effect...`);
-
-    const extractUrl = (out: unknown): string | null => {
-      if (!out) return null;
-      if (typeof out === "string") return out;
-      if (Array.isArray(out)) return typeof out[0] === "string" ? out[0] : null;
-      if (typeof out === "object") {
-        const o = out as Record<string, unknown>;
-        if (typeof o.url === "string") return o.url;
-        if (typeof o.video === "string") return o.video;
-        if (typeof o.output === "string") return o.output;
-        if (Array.isArray(o.output) && typeof o.output[0] === "string") return o.output[0];
-      }
-      return null;
-    };
-
-    const slideshowUrls: string[] = [];
-    
-    for (let chunk = 0; chunk < chunksNeeded; chunk++) {
-      const startIdx = chunk * imagesPerChunk;
-      const endIdx = Math.min(startIdx + imagesPerChunk, clampedImageList.length);
-      const chunkImages = clampedImageList.slice(startIdx, endIdx);
-      
-      // Ensure minimum of 2 images
-      while (chunkImages.length < 2 && clampedImageList.length > 0) {
-        chunkImages.push(clampedImageList[chunkImages.length % clampedImageList.length]);
-      }
-      
-      // Calculate average duration for this chunk
-      const chunkAvgDuration = Math.round(chunkImages.reduce((acc, img) => acc + img.duration, 0) / chunkImages.length);
-      const clampedDuration = Math.max(2, Math.min(10, chunkAvgDuration));
-      
-      console.log(`[BG] Chunk ${chunk + 1}/${chunksNeeded}: ${chunkImages.length} images, ~${clampedDuration}s each, Ken Burns enabled`);
-
-      const slideshowOut = await replicate.run(
-        "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
-        {
-          input: {
-            images: chunkImages.map(img => img.url),
-            duration_per_image: clampedDuration,
-            frame_rate: 30,
-            resolution: "1080p",
-            aspect_ratio: "auto",
-            transition_type: "fade",
-            zoom_pan: true, // Ken Burns effect enabled!
-          },
-        }
-      );
-
-      console.log(`[BG] Slideshow API response:`, JSON.stringify(slideshowOut));
-
-      const chunkUrl = extractUrl(slideshowOut);
-      if (chunkUrl) {
-        slideshowUrls.push(chunkUrl);
-        console.log(`[BG] Chunk ${chunk + 1} complete: ${chunkUrl}`);
-      } else {
-        console.error(`[BG] Chunk ${chunk + 1} failed, raw output:`, slideshowOut);
-      }
-    }
-
-    if (slideshowUrls.length === 0) {
-      throw new Error('Failed to generate any slideshow chunks');
-    }
-
-    // Concatenate chunks if multiple
-    let baseVideoUrl: string;
-    if (slideshowUrls.length === 1) {
-      baseVideoUrl = slideshowUrls[0];
-    } else {
-      console.log(`[BG] Concatenating ${slideshowUrls.length} slideshow chunks...`);
-      try {
-        const concatOut = await replicate.run(
-          "fofr/video-concat:50ee2c50c05cb8fcb1dbbc1d1e3e0bbe08f912e1e0f1e2e1e3e0bbe08f912e1e",
-          {
-            input: {
-              video_urls: slideshowUrls.join(','),
-            },
-          }
-        );
-        const concatUrl = extractUrl(concatOut);
-        baseVideoUrl = concatUrl || slideshowUrls[0];
-        console.log(`[BG] Concatenation complete: ${baseVideoUrl}`);
-      } catch (concatErr) {
-        console.error('[BG] Concat failed, using first chunk:', concatErr);
-        baseVideoUrl = slideshowUrls[0];
-      }
-    }
-
-    console.log('[BG] Base video with Ken Burns ready:', baseVideoUrl);
-
-    // Step 3: Generate ASS subtitles for burning
+    // Step 2: Generate ASS subtitles
     console.log('[BG] Generating ASS subtitles...');
     const assContent = generateAssSubtitles(wordTimestamps, scenes);
-    console.log(`[BG] ASS subtitles generated: ${assContent.split('\n').length} lines`);
+    const assLineCount = assContent.split('\n').length;
+    console.log(`[BG] ASS subtitles generated: ${assLineCount} lines`);
     
-    // Upload ASS file to storage for FFmpeg
+    // Upload ASS file to storage
     const assFileName = `${projectId}/${renderId}_subtitles.ass`;
     const { error: assUploadError } = await supabase.storage
       .from('renders')
@@ -467,46 +512,137 @@ async function processRender(
       const { data: assPublicUrl } = supabase.storage.from('renders').getPublicUrl(assFileName);
       assFileUrl = assPublicUrl.publicUrl;
       console.log('[BG] ASS file uploaded:', assFileUrl);
+    } else {
+      console.error('[BG] ASS upload error:', assUploadError);
     }
 
-    // Step 4: Mux audio and burn subtitles using FFmpeg
-    let finalVideoUrl: string | null = null;
-    let audioMuxWarning: string | null = null;
+    // Step 3: Generate Ken Burns video using FFmpeg via Replicate
+    console.log('[BG] Generating Ken Burns video with FFmpeg...');
+    
+    // Build image URLs and durations arrays
+    const imageUrls = imageList.map(img => img.url);
+    const durations = imageList.map(img => img.duration);
+    
+    // Use magpai-app/cog-ffmpeg for full FFmpeg control
+    // This model accepts URLs directly in the command!
+    const ffmpegCommand = buildFfmpegCommand(imageUrls, durations, finalAudioUrl, assFileUrl, 30);
+    console.log('[BG] FFmpeg command length:', ffmpegCommand.length);
+    console.log('[BG] FFmpeg command preview:', ffmpegCommand.substring(0, 500) + '...');
 
-    // Try to mux audio first (subtitles are in VTT for playback, ASS for burning which we'll do separately if model supports it)
-    if (finalAudioUrl) {
+    let baseVideoUrl: string | null = null;
+    
+    try {
+      // Call cog-ffmpeg with the command
+      // The model can fetch URLs directly, so we pass them in the command
+      console.log('[BG] Calling magpai-app/cog-ffmpeg...');
+      
+      const ffmpegOutput = await replicate.run(
+        "magpai-app/cog-ffmpeg:e3db0c6ade74acc80af7cbbe9c3c67e8209f9c87d8b85b3749093be181d7aa6b",
+        {
+          input: {
+            command: ffmpegCommand,
+            output1: "output.mp4",
+          },
+        }
+      );
+
+      console.log('[BG] FFmpeg output:', JSON.stringify(ffmpegOutput));
+      
+      // Extract URL from output
+      if (ffmpegOutput) {
+        if (typeof ffmpegOutput === 'string') {
+          baseVideoUrl = ffmpegOutput;
+        } else if (Array.isArray(ffmpegOutput) && ffmpegOutput.length > 0) {
+          baseVideoUrl = typeof ffmpegOutput[0] === 'string' ? ffmpegOutput[0] : null;
+        } else if (typeof ffmpegOutput === 'object') {
+          const out = ffmpegOutput as Record<string, unknown>;
+          baseVideoUrl = (out.output1 || out.output || out.video || out.url) as string | null;
+          if (!baseVideoUrl && Array.isArray(out.output)) {
+            baseVideoUrl = out.output[0] as string;
+          }
+        }
+      }
+      
+      if (baseVideoUrl) {
+        console.log('[BG] Ken Burns video generated:', baseVideoUrl);
+      }
+    } catch (ffmpegErr) {
+      console.error('[BG] FFmpeg failed:', ffmpegErr);
+      
+      // Fallback: try the simpler slideshow model without Ken Burns
+      console.log('[BG] Falling back to lucataco slideshow (without Ken Burns)...');
+      
       try {
-        console.log('[BG] Muxing audio with video...');
-        const muxOut = await replicate.run(
-          "lucataco/video-audio-merge:8c3d57c9c9a1aaa05feabafbcd2dff9f68a5cb394e54ec020c1c2dcc42bde109",
+        // Clamp durations for the slideshow model
+        const clampedDurations = durations.map(d => Math.min(10, d));
+        const avgDuration = Math.round(clampedDurations.reduce((a, b) => a + b, 0) / clampedDurations.length);
+        
+        const slideshowOut = await replicate.run(
+          "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
           {
             input: {
-              video_file: baseVideoUrl,
-              audio_file: finalAudioUrl,
-              duration_mode: "audio",
+              images: imageUrls,
+              duration_per_image: Math.max(2, Math.min(10, avgDuration)),
+              frame_rate: 30,
+              resolution: "1080p",
+              aspect_ratio: "16:9",
+              transition_type: "fade",
             },
           }
         );
-
-        const muxUrl = extractUrl(muxOut);
-        if (muxUrl) {
-          baseVideoUrl = muxUrl;
-          console.log('[BG] Audio mux complete:', baseVideoUrl);
-        } else {
-          audioMuxWarning = 'Audio mux returned no video URL - using video without audio';
-          console.warn('[BG]', audioMuxWarning);
+        
+        if (slideshowOut) {
+          if (typeof slideshowOut === 'string') {
+            baseVideoUrl = slideshowOut;
+          } else if (Array.isArray(slideshowOut)) {
+            baseVideoUrl = slideshowOut[0] as string;
+          }
         }
-      } catch (muxErr) {
-        audioMuxWarning = `Audio mux failed: ${(muxErr as Error)?.message ?? 'Unknown error'}`;
-        console.error('[BG]', audioMuxWarning);
+        
+        if (baseVideoUrl) {
+          console.log('[BG] Fallback slideshow generated:', baseVideoUrl);
+          
+          // Still need to mux audio if available
+          if (finalAudioUrl) {
+            try {
+              console.log('[BG] Muxing audio with fallback video...');
+              const muxOut = await replicate.run(
+                "lucataco/video-audio-merge:8c3d57c9c9a1aaa05feabafbcd2dff9f68a5cb394e54ec020c1c2dcc42bde109",
+                {
+                  input: {
+                    video_file: baseVideoUrl,
+                    audio_file: finalAudioUrl,
+                    duration_mode: "audio",
+                  },
+                }
+              );
+              
+              if (muxOut) {
+                const muxUrl = typeof muxOut === 'string' ? muxOut : (Array.isArray(muxOut) ? muxOut[0] : null);
+                if (muxUrl) {
+                  baseVideoUrl = muxUrl as string;
+                  console.log('[BG] Audio muxed:', baseVideoUrl);
+                }
+              }
+            } catch (muxErr) {
+              console.error('[BG] Audio mux failed:', muxErr);
+            }
+          }
+        }
+      } catch (fallbackErr) {
+        console.error('[BG] Fallback slideshow also failed:', fallbackErr);
+        throw new Error('Failed to generate video with both FFmpeg and fallback methods');
       }
-    } else {
-      audioMuxWarning = 'No audio URL provided; video is silent.';
-      console.log('[BG]', audioMuxWarning);
     }
 
-    // Upload final video to storage
+    if (!baseVideoUrl) {
+      throw new Error('Failed to generate video');
+    }
+
+    // Step 4: Upload final video to storage
     console.log('[BG] Uploading video to storage...');
+    let finalVideoUrl: string | null = null;
+    
     const videoResponse = await fetch(baseVideoUrl);
     if (!videoResponse.ok) {
       throw new Error(`Failed to download video: ${videoResponse.status}`);
@@ -534,7 +670,7 @@ async function processRender(
       console.log('[BG] Video uploaded:', finalVideoUrl);
     }
 
-    // Generate SEO metadata
+    // Step 5: Generate SEO metadata
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
     let seoData = { title: '', description: '', keywords: '', hashtags: '' };
 
@@ -586,7 +722,7 @@ async function processRender(
       }
     }
 
-    // Generate SRT and VTT from word timestamps (for download/external players)
+    // Step 6: Generate SRT and VTT subtitle files
     let srtContent = '';
     let vttContent = 'WEBVTT\n\n';
     let subtitleIndex = 1;
@@ -640,7 +776,7 @@ async function processRender(
       
       console.log(`[BG] Generated ${subtitleIndex} subtitle cues`);
     } else {
-      console.log('[BG] No word timestamps, using scene-based subtitles');
+      console.log('[BG] No word timestamps, using scene-based subtitles for SRT/VTT');
       
       for (const scene of scenes) {
         const sceneStart = scene.start_time || 0;
@@ -676,7 +812,7 @@ async function processRender(
       }
     }
 
-    // Generate viral thumbnail
+    // Step 7: Generate viral thumbnail
     let generatedThumbnailUrl: string | null = thumbnailImageUrl || allImages[0]?.url || null;
     
     if (lovableApiKey && generatedThumbnailUrl) {
@@ -755,7 +891,7 @@ Make it irresistible to click!`
       }
     }
 
-    // Update render record with results
+    // Step 8: Update render record with results
     const isSuccess = !!finalVideoUrl;
 
     const { error: updateError } = await supabase
@@ -770,7 +906,7 @@ Make it irresistible to click!`
         seo_hashtags: seoData.hashtags,
         subtitle_srt: srtContent,
         subtitle_vtt: vttContent,
-        error_message: isSuccess ? (audioMuxWarning ?? null) : 'Failed to generate final mp4',
+        error_message: isSuccess ? null : 'Failed to generate final mp4',
       })
       .eq('id', renderId);
 
@@ -789,7 +925,6 @@ Make it irresistible to click!`
   } catch (error) {
     console.error(`[BG] Render ${renderId} failed:`, error);
     
-    // Update render as failed
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -860,13 +995,12 @@ serve(async (req) => {
     const renderId = renderRecord.id;
     console.log(`Created render record: ${renderId} - starting background processing`);
 
-    // Start background processing - this allows the request to return immediately
+    // Start background processing
     // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
     (globalThis as any).EdgeRuntime?.waitUntil?.(
       processRender(projectId, scenes, audioUrl, audioDuration, thumbnailImageUrl, projectTitle, renderId, wordTimestamps)
     );
 
-    // Return immediately with the render ID
     return new Response(JSON.stringify({
       success: true,
       renderId,
