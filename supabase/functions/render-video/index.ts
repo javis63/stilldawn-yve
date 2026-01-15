@@ -293,9 +293,11 @@ async function processRender(
       }
     } else if (scenesWithImage.length > 0) {
       // Only images - create slideshow with Ken Burns effect
-      // Replicate model has a MAX of 10 seconds per image, so we need to repeat images
+      // Replicate model limits: max 10s per image, max 50 images per call
+      // For longer videos, we generate multiple slideshows and concatenate them
       const MAX_DURATION_PER_IMAGE = 10; // Replicate API limit
       const MAX_SLIDESHOW_IMAGES = 50; // Replicate model limit
+      const MAX_SLIDESHOW_DURATION = MAX_DURATION_PER_IMAGE * MAX_SLIDESHOW_IMAGES; // 500s per chunk
       
       const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
       const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
@@ -316,47 +318,89 @@ async function processRender(
         uniqueImages.push(allImageUrls[0]);
       }
 
-      // Calculate how to fill the target duration with max 10s per image slot
-      // Total slots needed = targetDuration / MAX_DURATION_PER_IMAGE
-      const slotsNeeded = Math.ceil(targetDurationSec / MAX_DURATION_PER_IMAGE);
+      // Calculate how many slideshow chunks we need
+      const chunksNeeded = Math.ceil(targetDurationSec / MAX_SLIDESHOW_DURATION);
+      const durationPerChunk = targetDurationSec / chunksNeeded;
+      const imagesPerChunk = Math.min(MAX_SLIDESHOW_IMAGES, Math.ceil(durationPerChunk / MAX_DURATION_PER_IMAGE));
+      const durationPerImage = Math.min(MAX_DURATION_PER_IMAGE, Math.max(3, Math.ceil(durationPerChunk / imagesPerChunk)));
       
-      // Build image sequence by cycling through unique images to fill slots
-      const imagesForSlideshow: string[] = [];
-      for (let i = 0; i < Math.min(slotsNeeded, MAX_SLIDESHOW_IMAGES); i++) {
-        imagesForSlideshow.push(uniqueImages[i % uniqueImages.length]);
-      }
+      console.log(`[BG] Target: ${targetDurationSec}s, chunks needed: ${chunksNeeded}, duration per chunk: ${durationPerChunk.toFixed(1)}s`);
+      console.log(`[BG] Unique images: ${uniqueImages.length}, images per chunk: ${imagesPerChunk}, duration per image: ${durationPerImage}s`);
 
-      // Ensure minimum of 2 images (required by slideshow model)
-      while (imagesForSlideshow.length < 2 && uniqueImages[0]) {
-        imagesForSlideshow.push(uniqueImages[0]);
-      }
-
-      // Calculate actual duration per image (capped at 10s)
-      const durationPerImage = Math.min(
-        MAX_DURATION_PER_IMAGE,
-        Math.max(3, Math.ceil(targetDurationSec / imagesForSlideshow.length))
-      );
+      // Generate slideshows for each chunk
+      const slideshowUrls: string[] = [];
       
-      console.log(`[BG] Unique images: ${uniqueImages.length}, slots: ${imagesForSlideshow.length}, duration per slot: ${durationPerImage}s, total target: ${targetDurationSec}s`);
-
-      console.log(`[BG] Ken Burns Slideshow: ${imagesForSlideshow.length} frames, ${durationPerImage}s each, actual: ${imagesForSlideshow.length * durationPerImage}s`);
-
-      const slideshowOut = await replicate.run(
-        "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
-        {
-          input: {
-            images: imagesForSlideshow,
-            duration_per_image: durationPerImage,
-            frame_rate: 30,
-            resolution: "1080p",
-            aspect_ratio: "auto",
-            transition_type: "fade",
-            zoom_pan: true,
-          },
+      for (let chunk = 0; chunk < chunksNeeded; chunk++) {
+        // Build image sequence for this chunk by cycling through unique images
+        const chunkImages: string[] = [];
+        const startOffset = chunk * imagesPerChunk;
+        
+        for (let i = 0; i < imagesPerChunk; i++) {
+          chunkImages.push(uniqueImages[(startOffset + i) % uniqueImages.length]);
         }
-      );
+        
+        // Ensure minimum of 2 images (required by slideshow model)
+        while (chunkImages.length < 2 && uniqueImages[0]) {
+          chunkImages.push(uniqueImages[chunkImages.length % uniqueImages.length]);
+        }
 
-      baseVideoUrl = extractUrl(slideshowOut);
+        console.log(`[BG] Generating slideshow chunk ${chunk + 1}/${chunksNeeded}: ${chunkImages.length} images, ${durationPerImage}s each`);
+
+        const slideshowOut = await replicate.run(
+          "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
+          {
+            input: {
+              images: chunkImages,
+              duration_per_image: durationPerImage,
+              frame_rate: 30,
+              resolution: "1080p",
+              aspect_ratio: "auto",
+              transition_type: "fade",
+              zoom_pan: true,
+            },
+          }
+        );
+
+        const chunkUrl = extractUrl(slideshowOut);
+        if (chunkUrl) {
+          slideshowUrls.push(chunkUrl);
+          console.log(`[BG] Chunk ${chunk + 1} complete: ${chunkUrl}`);
+        } else {
+          console.error(`[BG] Chunk ${chunk + 1} failed to generate`);
+        }
+      }
+
+      if (slideshowUrls.length === 0) {
+        throw new Error('Failed to generate any slideshow chunks');
+      }
+
+      // If we have multiple chunks, concatenate them
+      if (slideshowUrls.length === 1) {
+        baseVideoUrl = slideshowUrls[0];
+      } else {
+        console.log(`[BG] Concatenating ${slideshowUrls.length} slideshow chunks...`);
+        try {
+          const concatOut = await replicate.run(
+            "fofr/video-concat:50ee2c50c05cb8fcb1dbbc1d1e3e0bbe08f912e1e0f1e2e1e3e0bbe08f912e1e",
+            {
+              input: {
+                video_urls: slideshowUrls.join(','),
+              },
+            }
+          );
+          baseVideoUrl = extractUrl(concatOut);
+          
+          if (!baseVideoUrl) {
+            console.warn('[BG] Concat returned no URL, using first chunk');
+            baseVideoUrl = slideshowUrls[0];
+          } else {
+            console.log(`[BG] Concatenation complete: ${baseVideoUrl}`);
+          }
+        } catch (concatErr) {
+          console.error('[BG] Video concat failed, using first chunk:', concatErr);
+          baseVideoUrl = slideshowUrls[0];
+        }
+      }
     }
 
     if (!baseVideoUrl) {
