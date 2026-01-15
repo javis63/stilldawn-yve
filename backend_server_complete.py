@@ -29,7 +29,7 @@ from flask_cors import CORS
 VPS_API_KEY = "T6ELEzKycQ5zKBiTcVhccaNi7Ldynl9PcRlwmyGFac257a17"
 
 # Directories
-BASE_DIR = Path('/root/story-automationvps')
+BASE_DIR = Path('/root/story-automation')
 UPLOAD_DIR = BASE_DIR / 'uploads'
 OUTPUT_DIR = BASE_DIR / 'output'
 TEMP_DIR = BASE_DIR / 'temp'
