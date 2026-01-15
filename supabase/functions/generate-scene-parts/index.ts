@@ -91,22 +91,29 @@ Your task is to divide the given narration into ${targetParts} distinct parts ba
 - Logical paragraph or section breaks
 - Visual scene changes
 
+CRITICAL RULES:
+1. Each part MUST contain COMPLETE sentences. NEVER split a sentence between parts.
+2. Include the FULL narration text for each part - no truncation, no summaries.
+3. Every word from the original narration must appear in exactly one part.
+
 For each part, provide:
-1. The exact narration text for that part
-2. A detailed visual prompt (50-80 words) describing the ideal imagery
+1. The EXACT and COMPLETE narration text for that part (full sentences only)
+2. A detailed visual prompt (50-80 words) describing a SINGLE cohesive image
 
 CRITICAL: You must return ONLY valid JSON in this exact format:
 {
   "parts": [
     {
       "part_number": 1,
-      "content": "The exact narration text for this part...",
-      "visual_prompt": "Detailed visual description: lighting, mood, composition, style, camera angle..."
+      "content": "The exact and complete narration text for this part with full sentences...",
+      "visual_prompt": "Detailed visual description of a SINGLE image: lighting, mood, composition, style, camera angle..."
     }
   ]
 }
 
 Guidelines for visual prompts:
+- NEVER use words like "montage", "cut to", "transition to", "series of", "sequence of", "multiple shots"
+- Each prompt must describe ONE single cohesive image that can be generated as a standalone visual
 - Be specific: lighting (golden hour, dramatic shadows), mood (tense, serene)
 - Include composition: wide establishing shot, close-up, aerial view
 - Mention style: photorealistic, cinematic, illustration, oil painting
