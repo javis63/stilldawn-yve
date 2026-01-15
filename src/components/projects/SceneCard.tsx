@@ -16,14 +16,28 @@ import {
   ImageIcon,
   Plus,
   X,
+  Sparkles,
+  Palette,
+  Copy,
+  Check,
+  Loader2,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Scene, TransitionType } from "@/types/project";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
+interface Part {
+  part_number: number;
+  start_time: number;
+  end_time: number;
+  duration: number;
+  content: string;
+  visual_prompt: string;
+}
+
 interface SceneCardProps {
-  scene: Scene & { image_urls?: string[]; image_durations?: number[] };
+  scene: Scene & { image_urls?: string[]; image_durations?: number[]; parts?: Part[] };
   isExpanded: boolean;
   onToggle: () => void;
   onUpdate: () => void;
@@ -48,10 +62,22 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+function formatDuration(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  if (mins > 0) {
+    return `${mins}m ${secs}s`;
+  }
+  return `${secs}s`;
+}
+
 export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, isThumbnailScene, onSetThumbnail }: SceneCardProps) {
   const [transition, setTransition] = useState<TransitionType>(scene.transition);
   const [uploading, setUploading] = useState(false);
   const [imageDurations, setImageDurations] = useState<number[]>(scene.image_durations || []);
+  const [generatingParts, setGeneratingParts] = useState(false);
+  const [copiedPrompt, setCopiedPrompt] = useState<number | null>(null);
+  const [partsExpanded, setPartsExpanded] = useState(true);
 
   // Get all images (combine image_url with image_urls array)
   const getAllImages = (): string[] => {
@@ -67,11 +93,43 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
 
   const allImages = getAllImages();
   const sceneDuration = scene.end_time - scene.start_time;
+  const parts = scene.parts || [];
 
   // Calculate default duration per image (evenly distributed)
   const getDefaultDuration = (imageCount: number) => {
     if (imageCount === 0) return 0;
     return sceneDuration / imageCount;
+  };
+
+  const handleGenerateParts = async () => {
+    setGeneratingParts(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-scene-parts', {
+        body: { sceneId: scene.id, projectId }
+      });
+
+      if (error) throw error;
+      if (!data.success) throw new Error(data.error || 'Failed to generate parts');
+
+      toast.success(`Generated ${data.count} parts`);
+      onUpdate();
+    } catch (error: any) {
+      console.error('Parts generation error:', error);
+      toast.error(error.message || 'Failed to generate parts');
+    } finally {
+      setGeneratingParts(false);
+    }
+  };
+
+  const handleCopyPrompt = async (prompt: string, partNumber: number) => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopiedPrompt(partNumber);
+      toast.success('Prompt copied to clipboard');
+      setTimeout(() => setCopiedPrompt(null), 2000);
+    } catch {
+      toast.error('Failed to copy');
+    }
   };
 
   const handleTransitionChange = async (value: TransitionType) => {
@@ -253,6 +311,11 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
                 )}
                 {allImages.length > 1 ? `${allImages.length} images` : scene.scene_type}
               </Badge>
+              {parts.length > 0 && (
+                <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
+                  {parts.length} parts
+                </Badge>
+              )}
               <span className="text-sm text-muted-foreground font-mono">
                 {formatTime(scene.start_time)} - {formatTime(scene.end_time)}
               </span>
@@ -283,6 +346,106 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
 
         <CollapsibleContent>
           <CardContent className="pt-0 space-y-4">
+            {/* Parts Breakdown Section */}
+            <div className="space-y-3 border border-border rounded-lg p-4 bg-muted/20">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">Parts Breakdown</span>
+                  <span className="text-xs text-muted-foreground">(uses Whisper timestamps for timing)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {parts.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setPartsExpanded(!partsExpanded)}
+                      className="h-7 text-xs"
+                    >
+                      {partsExpanded ? "Collapse" : "Expand"}
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleGenerateParts}
+                    disabled={generatingParts}
+                    className="h-8"
+                  >
+                    {generatingParts ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-4 w-4 mr-1" />
+                        {parts.length > 0 ? "Regenerate Parts" : "Generate Parts"}
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              {parts.length > 0 && partsExpanded && (
+                <div className="space-y-3 mt-3">
+                  {parts.map((part) => (
+                    <div key={part.part_number} className="border border-border rounded-lg bg-card overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-2 bg-muted/50 border-b border-border">
+                        <Badge variant="secondary" className="font-mono text-xs">
+                          Part {part.part_number}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground font-mono">
+                          {formatTime(part.start_time)} - {formatTime(part.end_time)}
+                        </span>
+                        <Badge variant="outline" className="text-xs">
+                          <Clock className="h-3 w-3 mr-1" />
+                          {formatDuration(part.duration)}
+                        </Badge>
+                      </div>
+                      
+                      <div className="p-3 space-y-3">
+                        {/* Part content */}
+                        <ScrollArea className="max-h-24">
+                          <p className="text-sm text-muted-foreground leading-relaxed">
+                            "{part.content}"
+                          </p>
+                        </ScrollArea>
+                        
+                        {/* Visual prompt */}
+                        <div className="bg-primary/5 border border-primary/20 rounded-md p-2">
+                          <div className="flex items-start gap-2">
+                            <Palette className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
+                            <p className="text-sm text-primary flex-1">
+                              {part.visual_prompt}
+                            </p>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 w-6 p-0 flex-shrink-0"
+                              onClick={() => handleCopyPrompt(part.visual_prompt, part.part_number)}
+                            >
+                              {copiedPrompt === part.part_number ? (
+                                <Check className="h-3 w-3 text-green-500" />
+                              ) : (
+                                <Copy className="h-3 w-3 text-muted-foreground" />
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {parts.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  Click "Generate Parts" to break down this scene into logical story segments with AI-generated visual prompts.
+                </p>
+              )}
+            </div>
+
             {/* Ken Burns Notice */}
             <div className="bg-primary/10 border border-primary/20 rounded-lg p-3">
               <p className="text-sm text-primary">
