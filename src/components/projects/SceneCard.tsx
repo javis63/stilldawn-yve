@@ -14,6 +14,9 @@ import {
   Copy,
   Check,
   ImageIcon,
+  Plus,
+  X,
+  GripVertical,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Scene, TransitionType } from "@/types/project";
@@ -21,7 +24,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 interface SceneCardProps {
-  scene: Scene;
+  scene: Scene & { image_urls?: string[] };
   isExpanded: boolean;
   onToggle: () => void;
   onUpdate: () => void;
@@ -51,6 +54,21 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
   const [transition, setTransition] = useState<TransitionType>(scene.transition);
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  // Get all images (combine image_url with image_urls array)
+  const getAllImages = (): string[] => {
+    const images: string[] = [];
+    if (scene.image_url) images.push(scene.image_url);
+    if (scene.image_urls && Array.isArray(scene.image_urls)) {
+      scene.image_urls.forEach(url => {
+        if (url && !images.includes(url)) images.push(url);
+      });
+    }
+    return images;
+  };
+
+  const allImages = getAllImages();
 
   const handleCopyPrompt = async () => {
     if (visualPrompt) {
@@ -92,35 +110,118 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
     }
   };
 
-  const handleFileUpload = async (file: File, type: "image" | "video") => {
+  const handleAddImage = async (file: File) => {
+    setUploading(true);
     try {
-      const bucket = type === "image" ? "images" : "videos";
-      const filePath = `${scene.project_id}/${scene.id}.${file.name.split(".").pop()}`;
+      const timestamp = Date.now();
+      const filePath = `${scene.project_id}/${scene.id}_${timestamp}.${file.name.split(".").pop()}`;
 
       const { error: uploadError } = await supabase.storage
-        .from(bucket)
+        .from("images")
         .upload(filePath, file, { upsert: true });
 
       if (uploadError) throw uploadError;
 
-      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(filePath);
+      const { data: urlData } = supabase.storage.from("images").getPublicUrl(filePath);
+      const newImageUrl = urlData.publicUrl;
 
-      const updateField = type === "image" ? "image_url" : "video_url";
+      // Update image_urls array
+      const currentUrls = scene.image_urls || [];
+      const updatedUrls = [...currentUrls, newImageUrl];
+
+      // If this is the first image, also set image_url
+      const updateData: any = { image_urls: updatedUrls };
+      if (!scene.image_url) {
+        updateData.image_url = newImageUrl;
+      }
+
       const { error: updateError } = await supabase
         .from("scenes")
-        .update({ [updateField]: urlData.publicUrl })
+        .update(updateData)
         .eq("id", scene.id);
 
       if (updateError) throw updateError;
 
-      toast.success(`${type === "image" ? "Image" : "Video"} uploaded`);
+      toast.success("Image added");
       onUpdate();
     } catch (error: any) {
-      toast.error(error.message || `Failed to upload ${type}`);
+      toast.error(error.message || "Failed to upload image");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleRemoveImage = async (imageUrl: string) => {
+    try {
+      const currentUrls = scene.image_urls || [];
+      const updatedUrls = currentUrls.filter(url => url !== imageUrl);
+      
+      const updateData: any = { image_urls: updatedUrls };
+      
+      // If removing the primary image, set first remaining as primary
+      if (scene.image_url === imageUrl) {
+        updateData.image_url = updatedUrls[0] || null;
+      }
+
+      const { error } = await supabase
+        .from("scenes")
+        .update(updateData)
+        .eq("id", scene.id);
+
+      if (error) throw error;
+
+      toast.success("Image removed");
+      onUpdate();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to remove image");
+    }
+  };
+
+  const handleSetPrimaryImage = async (imageUrl: string) => {
+    try {
+      const { error } = await supabase
+        .from("scenes")
+        .update({ image_url: imageUrl })
+        .eq("id", scene.id);
+
+      if (error) throw error;
+
+      toast.success("Primary image set");
+      onUpdate();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to set primary image");
+    }
+  };
+
+  const handleVideoUpload = async (file: File) => {
+    try {
+      const filePath = `${scene.project_id}/${scene.id}.${file.name.split(".").pop()}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("videos")
+        .upload(filePath, file, { upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage.from("videos").getPublicUrl(filePath);
+
+      const { error: updateError } = await supabase
+        .from("scenes")
+        .update({ video_url: urlData.publicUrl })
+        .eq("id", scene.id);
+
+      if (updateError) throw updateError;
+
+      toast.success("Video uploaded");
+      onUpdate();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to upload video");
     }
   };
 
   const duration = scene.end_time - scene.start_time;
+  const durationMinutes = Math.floor(duration / 60);
+  const durationSeconds = Math.floor(duration % 60);
 
   return (
     <Collapsible open={isExpanded} onOpenChange={onToggle}>
@@ -142,32 +243,48 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
                 ) : (
                   <Video className="h-3 w-3 mr-1" />
                 )}
-                {scene.scene_type}
+                {allImages.length > 1 ? `${allImages.length} images` : scene.scene_type}
               </Badge>
               <span className="text-sm text-muted-foreground font-mono">
                 {formatTime(scene.start_time)} - {formatTime(scene.end_time)}
               </span>
               <span className="text-xs text-muted-foreground">
-                ({duration.toFixed(1)}s)
+                ({durationMinutes}m {durationSeconds}s)
               </span>
               <div className="flex-1" />
-              {scene.image_url && (
-                <div className="h-8 w-12 rounded overflow-hidden">
-                  <img
-                    src={scene.image_url}
-                    alt={`Scene ${scene.scene_number}`}
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-              )}
+              {/* Show thumbnail previews of all images */}
+              <div className="flex -space-x-2">
+                {allImages.slice(0, 4).map((url, idx) => (
+                  <div key={idx} className="h-8 w-12 rounded overflow-hidden border-2 border-background">
+                    <img
+                      src={url}
+                      alt={`Scene ${scene.scene_number} image ${idx + 1}`}
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                ))}
+                {allImages.length > 4 && (
+                  <div className="h-8 w-12 rounded overflow-hidden border-2 border-background bg-muted flex items-center justify-center">
+                    <span className="text-xs text-muted-foreground">+{allImages.length - 4}</span>
+                  </div>
+                )}
+              </div>
             </div>
           </CardHeader>
         </CollapsibleTrigger>
 
         <CollapsibleContent>
           <CardContent className="pt-0 space-y-4">
+            {/* Ken Burns Notice */}
+            <div className="bg-primary/10 border border-primary/20 rounded-lg p-3">
+              <p className="text-sm text-primary">
+                <strong>Ken Burns Effect:</strong> Each image will have dynamic pan/zoom animations applied for the full duration it's displayed.
+                {allImages.length > 1 && ` Images will cycle with ${Math.round(duration / allImages.length)}s per image.`}
+              </p>
+            </div>
+
             {/* Thumbnail Toggle & Transition Selector */}
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-4">
                 <span className="text-sm text-muted-foreground">Transition:</span>
                 <Select value={transition} onValueChange={handleTransitionChange}>
@@ -200,9 +317,9 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
             {/* Narration Text */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Narration</label>
-              <p className="text-sm text-muted-foreground bg-muted/50 rounded-md p-3">
+              <div className="text-sm text-muted-foreground bg-muted/50 rounded-md p-3 max-h-32 overflow-y-auto">
                 {scene.narration}
-              </p>
+              </div>
             </div>
 
             {/* Visual Prompt */}
@@ -240,91 +357,132 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
               />
             </div>
 
-            {/* Media Upload Zones */}
-            <div className="grid grid-cols-2 gap-4">
-              {/* Image Upload */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Image</label>
-                {scene.image_url ? (
-                  <div className="relative aspect-video rounded-lg overflow-hidden border border-border">
-                    <img
-                      src={scene.image_url}
-                      alt={`Scene ${scene.scene_number}`}
-                      className="w-full h-full object-cover"
-                    />
-                    <label className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 hover:opacity-100 transition-opacity cursor-pointer">
-                      <Upload className="h-6 w-6 text-white" />
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          if (e.target.files?.[0]) {
-                            handleFileUpload(e.target.files[0], "image");
-                          }
-                        }}
-                      />
-                    </label>
-                  </div>
-                ) : (
-                  <label className="flex flex-col items-center justify-center aspect-video rounded-lg border-2 border-dashed border-border hover:border-primary/50 cursor-pointer transition-colors bg-muted/30">
-                    <Image className="h-8 w-8 text-muted-foreground mb-2" />
-                    <span className="text-sm text-muted-foreground">Upload Image</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        if (e.target.files?.[0]) {
-                          handleFileUpload(e.target.files[0], "image");
-                        }
-                      }}
-                    />
-                  </label>
-                )}
+            {/* Multiple Images Section */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-foreground">
+                  Images ({allImages.length}) - Each with Ken Burns Effect
+                </label>
+                <label className="cursor-pointer">
+                  <Button variant="outline" size="sm" disabled={uploading} asChild>
+                    <span>
+                      <Plus className="h-4 w-4 mr-1" />
+                      {uploading ? "Uploading..." : "Add Image"}
+                    </span>
+                  </Button>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        handleAddImage(e.target.files[0]);
+                      }
+                    }}
+                  />
+                </label>
               </div>
 
-              {/* Video Upload */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Video (Optional)</label>
-                {scene.video_url ? (
-                  <div className="relative aspect-video rounded-lg overflow-hidden border border-border">
-                    <video
-                      src={scene.video_url}
-                      className="w-full h-full object-cover"
-                      muted
-                    />
-                    <label className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 hover:opacity-100 transition-opacity cursor-pointer">
-                      <Upload className="h-6 w-6 text-white" />
-                      <input
-                        type="file"
-                        accept="video/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          if (e.target.files?.[0]) {
-                            handleFileUpload(e.target.files[0], "video");
-                          }
-                        }}
+              {allImages.length > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                  {allImages.map((url, idx) => (
+                    <div
+                      key={idx}
+                      className={`relative aspect-video rounded-lg overflow-hidden border-2 ${
+                        url === scene.image_url ? "border-primary" : "border-border"
+                      } group`}
+                    >
+                      <img
+                        src={url}
+                        alt={`Scene ${scene.scene_number} image ${idx + 1}`}
+                        className="w-full h-full object-cover"
                       />
-                    </label>
-                  </div>
-                ) : (
-                  <label className="flex flex-col items-center justify-center aspect-video rounded-lg border-2 border-dashed border-border hover:border-primary/50 cursor-pointer transition-colors bg-muted/30">
-                    <Video className="h-8 w-8 text-muted-foreground mb-2" />
-                    <span className="text-sm text-muted-foreground">Upload Video</span>
+                      {url === scene.image_url && (
+                        <Badge className="absolute top-1 left-1 text-xs" variant="default">
+                          Primary
+                        </Badge>
+                      )}
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                        {url !== scene.image_url && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleSetPrimaryImage(url)}
+                          >
+                            Set Primary
+                          </Button>
+                        )}
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleRemoveImage(url)}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <label className="flex flex-col items-center justify-center aspect-video max-w-md rounded-lg border-2 border-dashed border-border hover:border-primary/50 cursor-pointer transition-colors bg-muted/30">
+                  <Image className="h-8 w-8 text-muted-foreground mb-2" />
+                  <span className="text-sm text-muted-foreground">Upload First Image</span>
+                  <span className="text-xs text-muted-foreground mt-1">Ken Burns effect will be applied automatically</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        handleAddImage(e.target.files[0]);
+                      }
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+
+            {/* Video Upload (Optional) */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Video (Optional - overrides images)</label>
+              {scene.video_url ? (
+                <div className="relative aspect-video max-w-md rounded-lg overflow-hidden border border-border">
+                  <video
+                    src={scene.video_url}
+                    className="w-full h-full object-cover"
+                    muted
+                    controls
+                  />
+                  <label className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 hover:opacity-100 transition-opacity cursor-pointer">
+                    <Upload className="h-6 w-6 text-white" />
                     <input
                       type="file"
                       accept="video/*"
                       className="hidden"
                       onChange={(e) => {
                         if (e.target.files?.[0]) {
-                          handleFileUpload(e.target.files[0], "video");
+                          handleVideoUpload(e.target.files[0]);
                         }
                       }}
                     />
                   </label>
-                )}
-              </div>
+                </div>
+              ) : (
+                <label className="flex flex-col items-center justify-center aspect-video max-w-md rounded-lg border-2 border-dashed border-border hover:border-primary/50 cursor-pointer transition-colors bg-muted/30">
+                  <Video className="h-8 w-8 text-muted-foreground mb-2" />
+                  <span className="text-sm text-muted-foreground">Upload Video</span>
+                  <input
+                    type="file"
+                    accept="video/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        handleVideoUpload(e.target.files[0]);
+                      }
+                    }}
+                  />
+                </label>
+              )}
             </div>
           </CardContent>
         </CollapsibleContent>

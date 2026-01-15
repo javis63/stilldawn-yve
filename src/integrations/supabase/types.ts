@@ -138,6 +138,7 @@ export type Database = {
           end_time: number
           id: string
           image_url: string | null
+          image_urls: string[] | null
           narration: string
           project_id: string
           scene_number: number
@@ -153,6 +154,7 @@ export type Database = {
           end_time: number
           id?: string
           image_url?: string | null
+          image_urls?: string[] | null
           narration: string
           project_id: string
           scene_number: number
@@ -168,6 +170,7 @@ export type Database = {
           end_time?: number
           id?: string
           image_url?: string | null
+          image_urls?: string[] | null
           narration?: string
           project_id?: string
           scene_number?: number

@@ -157,33 +157,47 @@ async function processRender(
       }
     }
 
-    // Step 1: Collect existing images/videos - NO image generation
+    // Step 1: Collect existing images/videos - including multiple images per scene
     console.log(`[BG] Processing ${scenes.length} scenes for media...`);
     const mediaResults = scenes.map((scene: any, i: number) => {
-      // Prefer video_url over image_url
+      // Prefer video_url over images
       if (scene.video_url) {
         console.log(`[BG] Scene ${i + 1} has video: ${scene.video_url}`);
-        return { index: i, url: scene.video_url, type: 'video' };
+        return { index: i, urls: [scene.video_url], type: 'video', duration: Number(scene.end_time) - Number(scene.start_time) };
       }
-      if (scene.image_url) {
-        console.log(`[BG] Scene ${i + 1} has image: ${scene.image_url}`);
-        return { index: i, url: scene.image_url, type: 'image' };
+      
+      // Collect all images for the scene (image_urls array + image_url)
+      const sceneImages: string[] = [];
+      if (scene.image_urls && Array.isArray(scene.image_urls)) {
+        sceneImages.push(...scene.image_urls);
       }
+      if (scene.image_url && !sceneImages.includes(scene.image_url)) {
+        sceneImages.unshift(scene.image_url);
+      }
+      
+      if (sceneImages.length > 0) {
+        console.log(`[BG] Scene ${i + 1} has ${sceneImages.length} image(s)`);
+        return { index: i, urls: sceneImages, type: 'image', duration: Number(scene.end_time) - Number(scene.start_time) };
+      }
+      
       console.log(`[BG] Scene ${i + 1} has no media`);
-      return { index: i, url: null, type: null };
+      return { index: i, urls: [], type: null, duration: 0 };
     });
 
-    const sortedImages = mediaResults.sort((a, b) => a.index - b.index);
-    let validImages = sortedImages.filter(r => r.url).map(r => r.url!);
+    const sortedMedia = mediaResults.sort((a, b) => a.index - b.index);
+    const allImageUrls: string[] = [];
+    sortedMedia.forEach(m => {
+      if (m.urls.length > 0) allImageUrls.push(...m.urls);
+    });
 
-    console.log(`[BG] Found ${validImages.length} media items`);
+    console.log(`[BG] Found ${allImageUrls.length} total media items`);
 
     // Check if we have any videos vs images
     const hasVideos = mediaResults.some(r => r.type === 'video');
     const hasImages = mediaResults.some(r => r.type === 'image');
     console.log(`[BG] Media types: ${hasVideos ? 'videos' : ''} ${hasImages ? 'images' : ''}`);
 
-    if (validImages.length === 0) {
+    if (allImageUrls.length === 0) {
       throw new Error('No media (images or videos) available for video generation');
     }
 
@@ -229,9 +243,9 @@ async function processRender(
       return null;
     };
 
-    // Use first scene's video/image directly if only one scene with video
-    const scenesWithVideo = mediaResults.filter(r => r.type === 'video');
-    const scenesWithImage = mediaResults.filter(r => r.type === 'image');
+    // Use first scene's video directly if only one scene with video
+    const scenesWithVideo = sortedMedia.filter(r => r.type === 'video');
+    const scenesWithImage = sortedMedia.filter(r => r.type === 'image');
     
     let baseVideoUrl: string | null = null;
     
@@ -239,7 +253,7 @@ async function processRender(
     if (scenesWithVideo.length > 0) {
       if (scenesWithVideo.length === 1) {
         // Single video - use it directly
-        baseVideoUrl = scenesWithVideo[0].url;
+        baseVideoUrl = scenesWithVideo[0].urls[0];
         console.log('[BG] Using single video directly:', baseVideoUrl);
       } else {
         // Multiple videos - try to concatenate them
@@ -250,54 +264,72 @@ async function processRender(
             "fofr/video-concat:50ee2c50c05cb8fcb1dbbc1d1e3e0bbe08f912e1e0f1e2e1e3e0bbe08f912e1e",
             {
               input: {
-                video_urls: scenesWithVideo.map(s => s.url).join(','),
+                video_urls: scenesWithVideo.map(s => s.urls[0]).join(','),
               },
             }
           );
           baseVideoUrl = extractUrl(concatOut);
         } catch (concatErr) {
           console.error('[BG] Video concat failed, using first video:', concatErr);
-          baseVideoUrl = scenesWithVideo[0].url;
+          baseVideoUrl = scenesWithVideo[0].urls[0];
         }
       }
     } else if (scenesWithImage.length > 0) {
-      // Only images - create slideshow
-      const orderedSceneImages = sortedImages.map((r) => r.url as string | null);
+      // Only images - create slideshow with Ken Burns effect
+      // Each image gets its duration calculated based on scene timing
       const inferredDuration = Math.max(...scenes.map((s: any) => Number(s?.end_time ?? 0)), 0);
       const targetDurationSec = Number(finalAudioDuration ?? 0) > 0 ? Number(finalAudioDuration) : inferredDuration;
 
-      let durationPerImage = Math.min(10, Math.max(0.1, Math.ceil(targetDurationSec / 50)));
-      if (!Number.isFinite(durationPerImage) || durationPerImage <= 0) durationPerImage = 1;
-
+      // Build image sequence with proper timing
+      // For Ken Burns, we use shorter duration per image with more images to create dynamic movement
       const imagesForSlideshow: string[] = [];
-      for (let i = 0; i < scenes.length; i++) {
-        const scene = scenes[i];
-        const img = orderedSceneImages[i] || validImages[0];
-        if (!img) continue;
-
-        const start = Number(scene?.start_time ?? 0);
-        const end = Number(scene?.end_time ?? start + durationPerImage);
-        const sceneDur = Math.max(0.1, end - start);
-        const repeats = Math.max(1, Math.ceil(sceneDur / durationPerImage));
-
-        for (let r = 0; r < repeats; r++) imagesForSlideshow.push(img);
+      const KEN_BURNS_CYCLE_DURATION = 8; // Each image gets 8 seconds with Ken Burns effect
+      
+      for (const sceneMedia of sortedMedia) {
+        if (sceneMedia.type !== 'image' || sceneMedia.urls.length === 0) continue;
+        
+        const sceneDuration = sceneMedia.duration;
+        const imagesInScene = sceneMedia.urls;
+        
+        if (imagesInScene.length === 1) {
+          // Single image - repeat it with Ken Burns cycles
+          const repeats = Math.max(1, Math.ceil(sceneDuration / KEN_BURNS_CYCLE_DURATION));
+          for (let r = 0; r < repeats; r++) {
+            imagesForSlideshow.push(imagesInScene[0]);
+          }
+        } else {
+          // Multiple images - distribute them across scene duration
+          const durationPerImage = sceneDuration / imagesInScene.length;
+          for (const img of imagesInScene) {
+            // Add each image with potential repeats for Ken Burns cycles
+            const repeats = Math.max(1, Math.ceil(durationPerImage / KEN_BURNS_CYCLE_DURATION));
+            for (let r = 0; r < repeats; r++) {
+              imagesForSlideshow.push(img);
+            }
+          }
+        }
       }
 
-      while (imagesForSlideshow.length < 2 && validImages[0]) imagesForSlideshow.push(validImages[0]);
-      if (imagesForSlideshow.length > 50) imagesForSlideshow.length = 50;
+      // Ensure minimum images and cap at max
+      while (imagesForSlideshow.length < 2 && allImageUrls[0]) imagesForSlideshow.push(allImageUrls[0]);
+      if (imagesForSlideshow.length > 100) imagesForSlideshow.length = 100;
 
-      console.log(`[BG] Slideshow: ${imagesForSlideshow.length} frames, ${durationPerImage}s each, target: ${targetDurationSec}s`);
+      // Calculate duration per image to match target duration
+      const durationPerImage = Math.max(3, Math.min(12, targetDurationSec / imagesForSlideshow.length));
+
+      console.log(`[BG] Ken Burns Slideshow: ${imagesForSlideshow.length} frames, ${durationPerImage.toFixed(1)}s each, target: ${targetDurationSec}s`);
 
       const slideshowOut = await replicate.run(
         "lucataco/image-to-video-slideshow:9804ac4d89f8bf64eed4bc0bee6e8e7d7c13fcce45280f770d0245890d8988e9",
         {
           input: {
             images: imagesForSlideshow,
-            duration_per_image: durationPerImage,
+            duration_per_image: Math.round(durationPerImage),
             frame_rate: 30,
             resolution: "1080p",
             aspect_ratio: "auto",
-            transition_type: "none",
+            transition_type: "fade", // Smooth transitions between Ken Burns cycles
+            zoom_pan: true, // Enable Ken Burns effect
           },
         }
       );
@@ -536,12 +568,12 @@ async function processRender(
     }
 
     // Generate viral thumbnail
-    let generatedThumbnailUrl: string | null = thumbnailImageUrl || validImages[0] || null;
+    let generatedThumbnailUrl: string | null = thumbnailImageUrl || allImageUrls[0] || null;
     
     if (lovableApiKey && generatedThumbnailUrl) {
       try {
         console.log('[BG] Generating viral thumbnail...');
-        const baseImageUrl = thumbnailImageUrl || validImages[0];
+        const baseImageUrl = thumbnailImageUrl || allImageUrls[0];
         const videoTitle = projectTitle || seoData.title || 'Video';
         const narrationSummary = scenes.map((s: any) => s.narration).join(' ').substring(0, 500);
         
