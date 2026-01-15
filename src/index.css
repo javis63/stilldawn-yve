@@ -111,4 +111,19 @@
       2px -2px 0 hsl(var(--caption-outline)),
       -2px -2px 0 hsl(var(--caption-outline));
   }
+
+  /* Style native WebVTT captions too (some browsers still show them) */
+  video::cue {
+    color: hsl(var(--caption));
+    background: transparent;
+    text-shadow:
+      0 2px 0 hsl(var(--caption-outline)),
+      0 -2px 0 hsl(var(--caption-outline)),
+      2px 0 0 hsl(var(--caption-outline)),
+      -2px 0 0 hsl(var(--caption-outline)),
+      2px 2px 0 hsl(var(--caption-outline)),
+      -2px 2px 0 hsl(var(--caption-outline)),
+      2px -2px 0 hsl(var(--caption-outline)),
+      -2px -2px 0 hsl(var(--caption-outline));
+  }
 }
