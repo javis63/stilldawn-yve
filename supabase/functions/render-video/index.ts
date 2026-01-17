@@ -36,6 +36,11 @@ async function pollVpsStatus(jobId: string, maxWaitMs: number = 1800000): Promis
       });
       
       if (!response.ok) {
+        // Fail fast on auth errors - don't keep polling for 30 mins
+        if (response.status === 401 || response.status === 403) {
+          console.error(`[VPS] Authentication failed (${response.status}). Check VPS_API_KEY secret.`);
+          return { success: false, error: `VPS authentication failed (${response.status}). Check VPS_API_KEY configuration.` };
+        }
         console.log(`[VPS] Status check failed: ${response.status}`);
         await new Promise(r => setTimeout(r, pollIntervalMs));
         continue;
@@ -243,6 +248,10 @@ async function processRender(
     
     if (!vpsResponse.ok) {
       const errorText = await vpsResponse.text();
+      // Provide clear error for auth issues
+      if (vpsResponse.status === 401 || vpsResponse.status === 403) {
+        throw new Error(`VPS authentication failed (${vpsResponse.status}). Check VPS_API_KEY secret matches your VPS server.`);
+      }
       throw new Error(`VPS request failed: ${vpsResponse.status} - ${errorText}`);
     }
     
