@@ -101,40 +101,31 @@ def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, supabase_k
         render_jobs[job_id]['message'] = 'Rendering video segments...'
         render_jobs[job_id]['progress'] = 30
         
-        # Render each segment with Ken Burns effect
+        # Render each segment with static image (no Ken Burns for stability)
         segment_videos = []
         for i, segment in enumerate(segments):
             render_jobs[job_id]['progress'] = 30 + int((i / len(segments)) * 40)
             render_jobs[job_id]['message'] = f'Rendering segment {i + 1}/{len(segments)}...'
             
             segment_video = os.path.join(work_dir, f'segment_{i:03d}.mp4')
-            
-            # Alternate between zoom in and zoom out for Ken Burns effect
-            if i % 2 == 0:
-                # Zoom in (1.0 -> 1.15)
-                zoom_filter = "zoompan=z='min(zoom+0.0003,1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={fps}*{dur}:s=1920x1080:fps={fps}"
-            else:
-                # Zoom out (1.15 -> 1.0)
-                zoom_filter = "zoompan=z='if(lte(zoom,1.0),1.15,max(1.001,zoom-0.0003))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={fps}*{dur}:s=1920x1080:fps={fps}"
-            
-            fps = 30
             dur = segment['duration']
-            zoom_filter = zoom_filter.format(fps=fps, dur=dur)
             
+            # Simple static image - scale to 1080p and hold for duration
             cmd = [
                 'ffmpeg', '-y',
                 '-loop', '1',
                 '-i', segment['image'],
-                '-vf', zoom_filter,
+                '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black',
                 '-t', str(dur),
                 '-c:v', 'libx264',
-                '-preset', 'medium',
+                '-preset', 'fast',
                 '-crf', '23',
                 '-pix_fmt', 'yuv420p',
+                '-r', '30',
                 segment_video
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             if result.returncode != 0:
                 print(f"FFmpeg segment error: {result.stderr}")
                 raise Exception(f"FFmpeg segment render failed: {result.stderr[:500]}")
