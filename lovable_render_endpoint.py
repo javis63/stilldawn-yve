@@ -47,6 +47,70 @@ def download_file(url, local_path):
     return local_path
 
 
+def create_ass_subtitles(scenes, output_ass):
+    """
+    Generate styled ASS subtitle file from scene narrations.
+    Yellow text with black outline, synced to scene timings.
+    """
+    # ASS file header with yellow text + black border
+    ass_content = """[Script Info]
+Title: Auto-Generated Subtitles
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,28,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,10,10,20,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    
+    # Add dialogue lines from scene data
+    for scene in scenes:
+        start = scene.get('start_time', 0)
+        end = scene.get('end_time', 0)
+        text = scene.get('narration', '').strip()
+        
+        if not text or end <= start:
+            continue
+        
+        # Convert seconds to ASS timestamp format (H:MM:SS.CC)
+        start_time = f"{int(start//3600)}:{int((start%3600)//60):02d}:{start%60:05.2f}"
+        end_time = f"{int(end//3600)}:{int((end%3600)//60):02d}:{end%60:05.2f}"
+        
+        # Escape special characters for ASS format
+        text = text.replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}')
+        
+        ass_content += f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{text}\n"
+    
+    with open(output_ass, 'w', encoding='utf-8') as f:
+        f.write(ass_content)
+    
+    print(f"✅ Created subtitle file: {output_ass}")
+    return output_ass
+
+
+def burn_subtitles(video_file, ass_file, output_file):
+    """Burn ASS subtitles into video using FFmpeg"""
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', video_file,
+        '-vf', f"ass={ass_file}",
+        '-c:a', 'copy',  # Copy audio without re-encoding
+        output_file
+    ]
+    
+    print(f"🔥 Burning subtitles into video...")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    
+    if result.returncode != 0:
+        print(f"Subtitle burn error: {result.stderr}")
+        raise Exception(f"FFmpeg subtitle burn failed: {result.stderr[:500]}")
+    
+    print(f"✅ Subtitles burned: {output_file}")
+    return output_file
+
+
 def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, supabase_key, project_id, render_id):
     """
     Render video using FFmpeg with Ken Burns effect
@@ -65,7 +129,7 @@ def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, supabase_k
         # Download all images and prepare segments
         segments = []
         for i, scene in enumerate(scenes):
-            render_jobs[job_id]['progress'] = int((i / len(scenes)) * 30)
+            render_jobs[job_id]['progress'] = int((i / len(scenes)) * 25)
             render_jobs[job_id]['message'] = f'Downloading scene {i + 1}/{len(scenes)}...'
             
             # Get image URL (support both single image and multiple images)
@@ -99,12 +163,12 @@ def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, supabase_k
         
         render_jobs[job_id]['status'] = 'rendering'
         render_jobs[job_id]['message'] = 'Rendering video segments...'
-        render_jobs[job_id]['progress'] = 30
+        render_jobs[job_id]['progress'] = 25
         
         # Render each segment with static image (no Ken Burns for stability)
         segment_videos = []
         for i, segment in enumerate(segments):
-            render_jobs[job_id]['progress'] = 30 + int((i / len(segments)) * 40)
+            render_jobs[job_id]['progress'] = 25 + int((i / len(segments)) * 35)
             render_jobs[job_id]['message'] = f'Rendering segment {i + 1}/{len(segments)}...'
             
             segment_video = os.path.join(work_dir, f'segment_{i:03d}.mp4')
@@ -132,7 +196,7 @@ def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, supabase_k
             
             segment_videos.append(segment_video)
         
-        render_jobs[job_id]['progress'] = 70
+        render_jobs[job_id]['progress'] = 60
         render_jobs[job_id]['message'] = 'Concatenating segments...'
         
         # Create concat file
@@ -156,11 +220,11 @@ def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, supabase_k
         if result.returncode != 0:
             raise Exception(f"FFmpeg concat failed: {result.stderr[:500]}")
         
-        render_jobs[job_id]['progress'] = 80
+        render_jobs[job_id]['progress'] = 70
         render_jobs[job_id]['message'] = 'Adding audio...'
         
         # Add audio to video
-        final_video = os.path.join(work_dir, 'final.mp4')
+        video_with_audio = os.path.join(work_dir, 'with_audio.mp4')
         cmd = [
             'ffmpeg', '-y',
             '-i', concat_video,
@@ -169,12 +233,25 @@ def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, supabase_k
             '-c:a', 'aac',
             '-b:a', '192k',
             '-shortest',
-            final_video
+            video_with_audio
         ]
         
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
             raise Exception(f"FFmpeg audio merge failed: {result.stderr[:500]}")
+        
+        # Generate and burn subtitles
+        render_jobs[job_id]['progress'] = 80
+        render_jobs[job_id]['message'] = 'Generating subtitles...'
+        
+        ass_file = os.path.join(work_dir, 'subtitles.ass')
+        create_ass_subtitles(scenes, ass_file)
+        
+        render_jobs[job_id]['progress'] = 85
+        render_jobs[job_id]['message'] = 'Burning subtitles into video...'
+        
+        final_video = os.path.join(work_dir, 'final.mp4')
+        burn_subtitles(video_with_audio, ass_file, final_video)
         
         render_jobs[job_id]['progress'] = 90
         render_jobs[job_id]['message'] = 'Uploading to storage...'
