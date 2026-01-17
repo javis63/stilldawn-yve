@@ -2,9 +2,28 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+function getBackendConfig(): { url: string; serviceRoleKey: string } {
+  const url = Deno.env.get("SUPABASE_URL")?.trim();
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
+
+  if (!url) throw new Error("Missing backend SUPABASE_URL environment variable");
+  if (!serviceRoleKey) throw new Error("Missing backend SUPABASE_SERVICE_ROLE_KEY environment variable");
+
+  // Basic sanity check (don’t log secrets).
+  // JWTs typically start with 'eyJ' and have 3 dot-separated parts.
+  const looksLikeJwt = serviceRoleKey.startsWith("eyJ") && serviceRoleKey.split(".").length === 3;
+  if (!looksLikeJwt) {
+    throw new Error(
+      `Backend service role key looks invalid (len=${serviceRoleKey.length}). Re-set SUPABASE_SERVICE_ROLE_KEY.`
+    );
+  }
+
+  return { url, serviceRoleKey };
+}
 
 // ============================================================================
 // VPS RENDER PIPELINE
@@ -193,10 +212,9 @@ async function processRender(
   projectTitle: string,
   renderId: string
 ): Promise<void> {
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-  const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const { url: supabaseUrl, serviceRoleKey: supabaseKey } = getBackendConfig();
   const supabase = createClient(supabaseUrl, supabaseKey);
-  
+
   const updateProgress = async (message: string) => {
     console.log(`[RENDER] ${message}`);
     await supabase
@@ -340,8 +358,7 @@ serve(async (req) => {
       throw new Error('Missing projectId or scenes');
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const { url: supabaseUrl, serviceRoleKey: supabaseKey } = getBackendConfig();
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     console.log(`[RENDER] Starting VPS render for project ${projectId} with ${scenes.length} scenes`);
