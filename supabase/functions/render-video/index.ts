@@ -11,14 +11,27 @@ function getBackendConfig(): { url: string; serviceRoleKey: string } {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
 
   if (!url) throw new Error("Missing backend SUPABASE_URL environment variable");
-  if (!serviceRoleKey) throw new Error("Missing backend SUPABASE_SERVICE_ROLE_KEY environment variable");
+  if (!serviceRoleKey) {
+    throw new Error("Missing backend SUPABASE_SERVICE_ROLE_KEY environment variable");
+  }
 
-  // Basic sanity check (don’t log secrets).
-  // JWTs typically start with 'eyJ' and have 3 dot-separated parts.
+  // Sanity checks (don’t log secrets).
+  // Depending on how your backend keys are configured, the service role key may be:
+  // - a JWT-like string (legacy anon/service_role keys)
+  // - an 'sb*_' style secret key (newer key formats)
   const looksLikeJwt = serviceRoleKey.startsWith("eyJ") && serviceRoleKey.split(".").length === 3;
-  if (!looksLikeJwt) {
+  const looksLikeSecretKey = /^(sbp_|sbs_|sb_)/.test(serviceRoleKey);
+
+  // Only hard-fail on obviously wrong input.
+  if (serviceRoleKey.length < 20) {
     throw new Error(
-      `Backend service role key looks invalid (len=${serviceRoleKey.length}). Re-set SUPABASE_SERVICE_ROLE_KEY.`
+      `Backend service role key looks too short (len=${serviceRoleKey.length}). Paste the full service_role key.`
+    );
+  }
+
+  if (!looksLikeJwt && !looksLikeSecretKey) {
+    console.warn(
+      `[RENDER] Backend service role key format is unexpected (len=${serviceRoleKey.length}). Continuing anyway.`
     );
   }
 
