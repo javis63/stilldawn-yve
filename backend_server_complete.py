@@ -32,8 +32,7 @@ OUTPUT_DIR = BASE_DIR / 'output'
 CONFIG_FILE = BASE_DIR / 'config.json'
 
 # Lovable render endpoint auth (used only for /api/lovable-render*)
-# Set VPS_API_KEY environment variable before running, e.g.: export VPS_API_KEY="your-key-here"
-VPS_API_KEY = os.environ.get('VPS_API_KEY', 'fallback-key-not-set')
+VPS_API_KEY = "lIf06nJWEyMxme6uxzQO2mTekTgebAxwWg71njxlb7b1eadc"
 
 # Ensure directories exist
 (UPLOAD_DIR / 'audio').mkdir(parents=True, exist_ok=True)
