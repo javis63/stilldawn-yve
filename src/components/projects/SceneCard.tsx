@@ -78,6 +78,7 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
   const [generatingParts, setGeneratingParts] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState<number | null>(null);
   const [partsExpanded, setPartsExpanded] = useState(true);
+  const [narrationExpanded, setNarrationExpanded] = useState(false);
 
   // Get all images (combine image_url with image_urls array)
   const getAllImages = (): string[] => {
@@ -484,10 +485,25 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
               )}
             </div>
 
-            {/* Narration Text - Scrollable */}
+            {/* Narration Text */}
             <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Narration</label>
-              <ScrollArea className="h-48 rounded-md border border-border bg-muted/50">
+              <div className="flex items-center justify-between gap-3">
+                <label className="text-sm font-medium text-foreground">Narration</label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setNarrationExpanded((v) => !v)}
+                >
+                  {narrationExpanded ? "Collapse" : "Expand"}
+                </Button>
+              </div>
+              <ScrollArea className={
+                narrationExpanded
+                  ? "h-[60vh] rounded-md border border-border bg-muted/50"
+                  : "h-48 rounded-md border border-border bg-muted/50"
+              }>
                 <div className="p-3 text-sm text-muted-foreground whitespace-pre-wrap">
                   {scene.narration}
                 </div>
