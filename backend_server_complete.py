@@ -28,7 +28,7 @@ CORS(app)
 # Configuration
 BASE_DIR = Path(__file__).parent
 UPLOAD_DIR = BASE_DIR / 'uploads'
-OUTPUT_DIR = BASE_DIR / 'output
+OUTPUT_DIR = BASE_DIR / 'output'
 CONFIG_FILE = BASE_DIR / 'config.json'
 
 # Lovable render endpoint auth (used only for /api/lovable-render*)
