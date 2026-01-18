@@ -114,12 +114,19 @@ def burn_subtitles(video_file, ass_file, output_file):
 def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, project_id, render_id):
     """
     Render video using FFmpeg.
-    Uses SUPABASE_SERVICE_ROLE_KEY environment variable for storage uploads.
+    Reads SUPABASE_SERVICE_ROLE_KEY from /root/story-automation/uploads/.supabase_key file.
     """
     try:
-        supabase_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
+        # Read service role key from file
+        key_file = '/root/story-automation/uploads/.supabase_key'
+        if not os.path.exists(key_file):
+            raise Exception(f"Supabase key file not found: {key_file}. Create it with your service role key.")
+        
+        with open(key_file, 'r') as f:
+            supabase_key = f.read().strip()
+        
         if not supabase_key:
-            raise Exception("SUPABASE_SERVICE_ROLE_KEY environment variable not set on VPS")
+            raise Exception("Supabase key file is empty")
         render_jobs[job_id]['status'] = 'downloading'
         render_jobs[job_id]['message'] = 'Downloading assets...'
         
@@ -344,9 +351,10 @@ def register_lovable_endpoints(app):
             if not all([project_id, render_id, scenes, audio_url, supabase_url]):
                 return jsonify({'error': 'Missing required fields'}), 400
             
-            # Check env var is set
-            if not os.environ.get('SUPABASE_SERVICE_ROLE_KEY'):
-                return jsonify({'error': 'SUPABASE_SERVICE_ROLE_KEY not configured on VPS'}), 500
+            # Check key file exists
+            key_file = '/root/story-automation/uploads/.supabase_key'
+            if not os.path.exists(key_file):
+                return jsonify({'error': f'Create {key_file} with your Supabase service role key'}), 500
             
             # Create job
             job_id = str(uuid.uuid4())
