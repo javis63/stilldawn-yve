@@ -180,6 +180,12 @@ def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, project_id
             dur = segment['duration']
             
             # Simple static image - scale to 1080p and hold for duration
+            print(f"[FFmpeg] Processing segment {i}: image={segment['image']}, duration={dur}s")
+            
+            # Verify image exists
+            if not os.path.exists(segment['image']):
+                raise Exception(f"Image file not found: {segment['image']}")
+            
             cmd = [
                 'ffmpeg', '-y',
                 '-loop', '1',
@@ -194,10 +200,14 @@ def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, project_id
                 segment_video
             ]
             
+            print(f"[FFmpeg] Command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             if result.returncode != 0:
-                print(f"FFmpeg segment error: {result.stderr}")
-                raise Exception(f"FFmpeg segment render failed: {result.stderr[:500]}")
+                # Get the last 500 chars of stderr (where actual errors are)
+                stderr_end = result.stderr[-500:] if len(result.stderr) > 500 else result.stderr
+                print(f"FFmpeg segment error (last 500 chars): {stderr_end}")
+                print(f"FFmpeg segment stdout: {result.stdout}")
+                raise Exception(f"FFmpeg segment render failed: {stderr_end}")
             
             segment_videos.append(segment_video)
         
