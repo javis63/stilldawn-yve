@@ -1,5 +1,11 @@
 import { Scene } from "@/types/project";
 
+export interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+}
+
 /**
  * Convert seconds to SMPTE timecode format (HH:MM:SS:FF)
  * Using 24fps as standard for video editing
@@ -16,6 +22,121 @@ function secondsToTimecode(seconds: number, fps: number = 24): string {
     secs.toString().padStart(2, '0'),
     frames.toString().padStart(2, '0'),
   ].join(':');
+}
+
+/**
+ * Convert seconds to SRT timecode format (HH:MM:SS,mmm)
+ */
+function secondsToSRTTimecode(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  const millis = Math.floor((seconds % 1) * 1000);
+  
+  return [
+    hours.toString().padStart(2, '0'),
+    minutes.toString().padStart(2, '0'),
+    secs.toString().padStart(2, '0'),
+  ].join(':') + ',' + millis.toString().padStart(3, '0');
+}
+
+/**
+ * Group words into subtitle chunks
+ * Groups by: max words per line, max characters, or punctuation breaks
+ */
+function groupWordsIntoSubtitles(
+  words: WordTimestamp[],
+  maxWordsPerSubtitle: number = 8,
+  maxCharsPerSubtitle: number = 42,
+  maxDuration: number = 4
+): { text: string; start: number; end: number }[] {
+  const subtitles: { text: string; start: number; end: number }[] = [];
+  
+  let currentWords: WordTimestamp[] = [];
+  let currentText = '';
+  
+  for (const word of words) {
+    const wordText = word.word.trim();
+    const testText = currentText ? `${currentText} ${wordText}` : wordText;
+    const currentDuration = currentWords.length > 0 
+      ? word.end - currentWords[0].start 
+      : 0;
+    
+    // Check if we should start a new subtitle
+    const shouldBreak = 
+      currentWords.length >= maxWordsPerSubtitle ||
+      testText.length > maxCharsPerSubtitle ||
+      currentDuration > maxDuration ||
+      (currentText && /[.!?]$/.test(currentText)); // Break after sentence-ending punctuation
+    
+    if (shouldBreak && currentWords.length > 0) {
+      subtitles.push({
+        text: currentText,
+        start: currentWords[0].start,
+        end: currentWords[currentWords.length - 1].end,
+      });
+      currentWords = [];
+      currentText = '';
+    }
+    
+    currentWords.push(word);
+    currentText = currentText ? `${currentText} ${wordText}` : wordText;
+  }
+  
+  // Don't forget the last group
+  if (currentWords.length > 0) {
+    subtitles.push({
+      text: currentText,
+      start: currentWords[0].start,
+      end: currentWords[currentWords.length - 1].end,
+    });
+  }
+  
+  return subtitles;
+}
+
+/**
+ * Generate SRT subtitle file from word timestamps
+ */
+export function generateSRT(wordTimestamps: WordTimestamp[]): string {
+  if (!wordTimestamps || wordTimestamps.length === 0) {
+    return '';
+  }
+  
+  const subtitles = groupWordsIntoSubtitles(wordTimestamps);
+  
+  return subtitles.map((sub, index) => {
+    const num = index + 1;
+    const startTC = secondsToSRTTimecode(sub.start);
+    const endTC = secondsToSRTTimecode(sub.end);
+    
+    return `${num}\n${startTC} --> ${endTC}\n${sub.text}\n`;
+  }).join('\n');
+}
+
+/**
+ * Generate VTT subtitle file from word timestamps (alternative format)
+ */
+export function generateVTT(wordTimestamps: WordTimestamp[]): string {
+  if (!wordTimestamps || wordTimestamps.length === 0) {
+    return '';
+  }
+  
+  const subtitles = groupWordsIntoSubtitles(wordTimestamps);
+  
+  const lines = ['WEBVTT', ''];
+  
+  subtitles.forEach((sub, index) => {
+    const startTC = secondsToSRTTimecode(sub.start).replace(',', '.');
+    const endTC = secondsToSRTTimecode(sub.end).replace(',', '.');
+    
+    lines.push(`${index + 1}`);
+    lines.push(`${startTC} --> ${endTC}`);
+    lines.push(sub.text);
+    lines.push('');
+  });
+  
+  return lines.join('\n');
 }
 
 /**
