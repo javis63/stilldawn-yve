@@ -111,16 +111,22 @@ def burn_subtitles(video_file, ass_file, output_file):
     return output_file
 
 
-def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, project_id, render_id):
+def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, project_id, render_id, supabase_key=None):
     """
     Render video using FFmpeg with Ken Burns effect.
-    Uses SUPABASE_SERVICE_ROLE_KEY environment variable for storage uploads.
+
+    Auth notes:
+    - Prefer using supabase_key passed from Lovable Cloud (request body) to avoid VPS env drift.
+    - Fallback to SUPABASE_SERVICE_ROLE_KEY environment variable if not provided.
     """
     try:
-        # Use environment variable for Supabase key (more secure than passing in request)
-        supabase_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
+        # Prefer key passed from the caller; fallback to env var.
         if not supabase_key:
-            raise Exception("SUPABASE_SERVICE_ROLE_KEY environment variable not set on VPS")
+            supabase_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
+        if not supabase_key:
+            raise Exception(
+                "No Supabase key provided. Pass 'supabase_key' in request or set SUPABASE_SERVICE_ROLE_KEY on VPS."
+            )
         render_jobs[job_id]['status'] = 'downloading'
         render_jobs[job_id]['message'] = 'Downloading assets...'
         
@@ -327,14 +333,14 @@ def register_lovable_endpoints(app):
             scenes = data.get('scenes', [])
             audio_url = data.get('audio_url')
             supabase_url = data.get('supabase_url')
-            # supabase_key is now read from env var, not from request
-            
+            supabase_key = data.get('supabase_key')  # may be omitted if VPS env var is set
+
             if not all([project_id, render_id, scenes, audio_url, supabase_url]):
                 return jsonify({'error': 'Missing required fields'}), 400
-            
-            # Check that env var is set
-            if not os.environ.get('SUPABASE_SERVICE_ROLE_KEY'):
-                return jsonify({'error': 'SUPABASE_SERVICE_ROLE_KEY not configured on VPS'}), 500
+
+            # Require either a key in request OR an env var
+            if not supabase_key and not os.environ.get('SUPABASE_SERVICE_ROLE_KEY'):
+                return jsonify({'error': 'Missing supabase_key and SUPABASE_SERVICE_ROLE_KEY not configured on VPS'}), 500
             
             # Create job
             job_id = str(uuid.uuid4())
@@ -349,7 +355,7 @@ def register_lovable_endpoints(app):
             # Start rendering in background
             thread = threading.Thread(
                 target=render_video_with_ffmpeg,
-                args=(job_id, scenes, audio_url, supabase_url, project_id, render_id)
+                args=(job_id, scenes, audio_url, supabase_url, project_id, render_id, supabase_key)
             )
             thread.daemon = True
             thread.start()
