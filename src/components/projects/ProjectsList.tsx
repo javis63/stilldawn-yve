@@ -242,13 +242,13 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
                 }`}
                 onClick={() => onSelectProject(project)}
               >
-                <div className="flex items-start gap-3">
+              <div className="flex items-start gap-2">
                   <Film className="h-5 w-5 text-primary mt-0.5 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-foreground truncate">
+                  <div className="flex-1 min-w-0 overflow-hidden">
+                    <p className="font-medium text-foreground truncate text-sm">
                       {project.title}
                     </p>
-                    <div className="flex items-center gap-2 mt-1">
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
                       <span className={`text-xs capitalize ${getStatusColor(project.status)}`}>
                         {project.status}
                         {project.status === "processing" && project.progress && project.progress > 0 && (
@@ -275,7 +275,7 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
                         <MoreVertical className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenuContent align="end" className="z-50 bg-popover border border-border shadow-lg" onClick={(e) => e.stopPropagation()}>
                       <DropdownMenuItem
                         onClick={() => handleArchiveProject(project, !(project as any).archived)}
                       >
