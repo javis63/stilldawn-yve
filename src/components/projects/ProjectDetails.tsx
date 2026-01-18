@@ -43,6 +43,9 @@ import {
   downloadFile,
   downloadAllImages,
   getSceneImages,
+  generateSRT,
+  generateVTT,
+  WordTimestamp,
 } from "@/utils/davinciExport";
 import { splitAudioIntoChunks, ChunkingProgress } from "@/utils/audioChunking";
 
@@ -59,6 +62,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   const [currentProject, setCurrentProject] = useState<Project>(project);
   const [renderProgress, setRenderProgress] = useState(0);
   const [thumbnailSceneId, setThumbnailSceneId] = useState<string | null>(null);
+  const [wordTimestamps, setWordTimestamps] = useState<WordTimestamp[]>([]);
   
   // Audio player state
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -73,20 +77,34 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     setCurrentProject(project);
   }, [project]);
 
-  // Fetch thumbnail scene id from project
+  // Fetch thumbnail scene id and word timestamps from project
   useEffect(() => {
-    const fetchThumbnailSceneId = async () => {
+    const fetchProjectDetails = async () => {
       const { data } = await supabase
         .from("projects")
-        .select("thumbnail_scene_id")
+        .select("thumbnail_scene_id, word_timestamps")
         .eq("id", project.id)
-        .single();
+        .maybeSingle();
       
       if (data?.thumbnail_scene_id) {
         setThumbnailSceneId(data.thumbnail_scene_id);
       }
+      
+      // Parse word timestamps
+      if (data?.word_timestamps) {
+        try {
+          const timestamps = typeof data.word_timestamps === 'string'
+            ? JSON.parse(data.word_timestamps)
+            : data.word_timestamps;
+          if (Array.isArray(timestamps)) {
+            setWordTimestamps(timestamps);
+          }
+        } catch (e) {
+          console.warn('Failed to parse word timestamps:', e);
+        }
+      }
     };
-    fetchThumbnailSceneId();
+    fetchProjectDetails();
   }, [project.id]);
 
   const fetchScenes = async () => {
@@ -645,6 +663,38 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
             >
               <Images className="h-4 w-4 mr-2" />
               Download All Images
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Subtitles</DropdownMenuLabel>
+            <DropdownMenuItem
+              onClick={() => {
+                if (wordTimestamps.length === 0) {
+                  toast.error('No word timestamps available. Generate timestamps first.');
+                  return;
+                }
+                const srt = generateSRT(wordTimestamps);
+                downloadFile(srt, `${currentProject.title.replace(/\s+/g, '_')}.srt`, 'text/plain');
+                toast.success('SRT subtitles downloaded!');
+              }}
+              disabled={wordTimestamps.length === 0}
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Download SRT Subtitles
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                if (wordTimestamps.length === 0) {
+                  toast.error('No word timestamps available. Generate timestamps first.');
+                  return;
+                }
+                const vtt = generateVTT(wordTimestamps);
+                downloadFile(vtt, `${currentProject.title.replace(/\s+/g, '_')}.vtt`, 'text/plain');
+                toast.success('VTT subtitles downloaded!');
+              }}
+              disabled={wordTimestamps.length === 0}
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Download VTT Subtitles
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
