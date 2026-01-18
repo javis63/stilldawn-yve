@@ -14,7 +14,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Search, RefreshCw, FolderOpen, Clock, Film, Trash2 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Search, RefreshCw, FolderOpen, Clock, Film, Trash2, Archive, ArchiveRestore, MoreVertical } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Project } from "@/types/project";
 import { formatDistanceToNow } from "date-fns";
@@ -29,6 +35,7 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -126,10 +133,34 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
     }
   };
 
+  const handleArchiveProject = async (project: Project, archive: boolean) => {
+    try {
+      const { error } = await supabase
+        .from("projects")
+        .update({ archived: archive })
+        .eq("id", project.id);
 
-  const filteredProjects = projects.filter((project) =>
-    project.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+      if (error) throw error;
+
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === project.id ? { ...p, archived: archive } as Project : p
+        )
+      );
+      
+      toast.success(archive ? "Project archived" : "Project restored");
+    } catch (error: any) {
+      console.error("Error archiving project:", error);
+      toast.error(error.message || "Failed to archive project");
+    }
+  };
+
+  // Filter projects by search and archived status
+  const filteredProjects = projects.filter((project) => {
+    const matchesSearch = project.title.toLowerCase().includes(searchQuery.toLowerCase());
+    const isArchived = (project as any).archived === true;
+    return matchesSearch && (showArchived ? isArchived : !isArchived);
+  });
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -153,15 +184,27 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
       {/* Header */}
       <div className="p-4 border-b border-border space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-foreground">Projects</h2>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={fetchProjects}
-            disabled={loading}
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          </Button>
+          <h2 className="font-semibold text-foreground">
+            {showArchived ? "Archived Projects" : "Projects"}
+          </h2>
+          <div className="flex items-center gap-1">
+            <Button
+              variant={showArchived ? "secondary" : "ghost"}
+              size="icon"
+              onClick={() => setShowArchived(!showArchived)}
+              title={showArchived ? "Show active projects" : "Show archived projects"}
+            >
+              {showArchived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={fetchProjects}
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            </Button>
+          </div>
         </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -221,18 +264,45 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
                       <Progress value={project.progress} className="h-1 mt-2" />
                     )}
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setProjectToDelete(project);
-                      setDeleteDialogOpen(true);
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenuItem
+                        onClick={() => handleArchiveProject(project, !(project as any).archived)}
+                      >
+                        {(project as any).archived ? (
+                          <>
+                            <ArchiveRestore className="h-4 w-4 mr-2" />
+                            Restore
+                          </>
+                        ) : (
+                          <>
+                            <Archive className="h-4 w-4 mr-2" />
+                            Archive
+                          </>
+                        )}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => {
+                          setProjectToDelete(project);
+                          setDeleteDialogOpen(true);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </Card>
             ))

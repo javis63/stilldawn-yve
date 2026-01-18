@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       projects: {
         Row: {
+          archived: boolean
           audio_duration: number | null
           audio_url: string | null
           created_at: string
@@ -31,6 +32,7 @@ export type Database = {
           word_timestamps: Json | null
         }
         Insert: {
+          archived?: boolean
           audio_duration?: number | null
           audio_url?: string | null
           created_at?: string
@@ -46,6 +48,7 @@ export type Database = {
           word_timestamps?: Json | null
         }
         Update: {
+          archived?: boolean
           audio_duration?: number | null
           audio_url?: string | null
           created_at?: string
