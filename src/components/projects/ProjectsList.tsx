@@ -235,17 +235,17 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
             filteredProjects.map((project) => (
               <Card
                 key={project.id}
-                className={`p-3 cursor-pointer transition-colors border ${
+                className={`p-3 cursor-pointer transition-colors border overflow-visible ${
                   selectedProjectId === project.id
                     ? "border-primary bg-primary/10"
                     : "border-border hover:border-primary/50 bg-card"
                 }`}
                 onClick={() => onSelectProject(project)}
               >
-              <div className="flex items-start gap-2">
-                  <Film className="h-5 w-5 text-primary mt-0.5 shrink-0" />
-                  <div className="flex-1 min-w-0 overflow-hidden">
-                    <p className="font-medium text-foreground truncate text-sm">
+              <div className="flex items-start gap-2 w-full">
+                  <Film className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-foreground truncate text-sm leading-tight">
                       {project.title}
                     </p>
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
@@ -268,11 +268,11 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
                     <DropdownMenuTrigger asChild>
                       <Button
                         variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground shrink-0"
+                        size="sm"
+                        className="h-6 w-6 p-0 text-muted-foreground shrink-0 ml-1"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <MoreVertical className="h-4 w-4" />
+                        <MoreVertical className="h-3.5 w-3.5" />
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="z-50 bg-popover border border-border shadow-lg" onClick={(e) => e.stopPropagation()}>
