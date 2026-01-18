@@ -111,14 +111,15 @@ def burn_subtitles(video_file, ass_file, output_file):
     return output_file
 
 
-def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, supabase_key, project_id, render_id):
+def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, project_id, render_id):
     """
-    Render video using FFmpeg with Ken Burns effect.
-    Supabase key is passed from the edge function.
+    Render video using FFmpeg.
+    Uses SUPABASE_SERVICE_ROLE_KEY environment variable for storage uploads.
     """
     try:
+        supabase_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
         if not supabase_key:
-            raise Exception("Supabase key not provided")
+            raise Exception("SUPABASE_SERVICE_ROLE_KEY environment variable not set on VPS")
         render_jobs[job_id]['status'] = 'downloading'
         render_jobs[job_id]['message'] = 'Downloading assets...'
         
@@ -339,10 +340,13 @@ def register_lovable_endpoints(app):
             scenes = data.get('scenes', [])
             audio_url = data.get('audio_url')
             supabase_url = data.get('supabase_url')
-            supabase_key = data.get('supabase_key')  # Get key from request
             
-            if not all([project_id, render_id, scenes, audio_url, supabase_url, supabase_key]):
-                return jsonify({'error': 'Missing required fields (including supabase_key)'}), 400
+            if not all([project_id, render_id, scenes, audio_url, supabase_url]):
+                return jsonify({'error': 'Missing required fields'}), 400
+            
+            # Check env var is set
+            if not os.environ.get('SUPABASE_SERVICE_ROLE_KEY'):
+                return jsonify({'error': 'SUPABASE_SERVICE_ROLE_KEY not configured on VPS'}), 500
             
             # Create job
             job_id = str(uuid.uuid4())
@@ -357,7 +361,7 @@ def register_lovable_endpoints(app):
             # Start rendering in background
             thread = threading.Thread(
                 target=render_video_with_ffmpeg,
-                args=(job_id, scenes, audio_url, supabase_url, supabase_key, project_id, render_id)
+                args=(job_id, scenes, audio_url, supabase_url, project_id, render_id)
             )
             thread.daemon = True
             thread.start()
