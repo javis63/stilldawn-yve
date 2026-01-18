@@ -19,6 +19,9 @@ import {
   AlertCircle,
   Volume2,
   VolumeX,
+  FileVideo,
+  FileText,
+  Images,
 } from "lucide-react";
 import { Project, Scene } from "@/types/project";
 import { supabase } from "@/integrations/supabase/client";
@@ -26,6 +29,21 @@ import { formatDistanceToNow } from "date-fns";
 import { SceneCard } from "./SceneCard";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuLabel,
+} from "@/components/ui/dropdown-menu";
+import {
+  generateEDL,
+  generateSceneCSV,
+  downloadFile,
+  downloadAllImages,
+  getSceneImages,
+} from "@/utils/davinciExport";
 import { splitAudioIntoChunks, ChunkingProgress } from "@/utils/audioChunking";
 
 interface ProjectDetailsProps {
@@ -574,12 +592,62 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           )}
         </div>
         <Separator orientation="vertical" className="h-9" />
-        <Button variant="ghost" size="icon">
-          <Download className="h-4 w-4" />
-        </Button>
-        <Button variant="ghost" size="icon">
-          <Upload className="h-4 w-4" />
-        </Button>
+        
+        {/* DaVinci Resolve Export Dropdown */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" className="gap-2">
+              <FileVideo className="h-4 w-4" />
+              Export for DaVinci
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>Export Options</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => {
+                const edl = generateEDL(currentProject.title, scenes);
+                downloadFile(edl, `${currentProject.title.replace(/\s+/g, '_')}.edl`, 'text/plain');
+                toast.success('EDL file downloaded!');
+              }}
+              disabled={scenes.length === 0}
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Download EDL Timeline
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                const csv = generateSceneCSV(currentProject.title, scenes);
+                downloadFile(csv, `${currentProject.title.replace(/\s+/g, '_')}_scenes.csv`, 'text/csv');
+                toast.success('Scene list CSV downloaded!');
+              }}
+              disabled={scenes.length === 0}
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Download Scene List (CSV)
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={async () => {
+                const images = getSceneImages(scenes);
+                if (images.length === 0) {
+                  toast.error('No images to download');
+                  return;
+                }
+                toast.info(`Downloading ${images.length} images...`);
+                await downloadAllImages(scenes, (current, total) => {
+                  if (current === total) {
+                    toast.success(`Downloaded ${total} images!`);
+                  }
+                });
+              }}
+              disabled={scenes.length === 0}
+            >
+              <Images className="h-4 w-4 mr-2" />
+              Download All Images
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Project Stats */}
