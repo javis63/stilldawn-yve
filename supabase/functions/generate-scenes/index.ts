@@ -2,58 +2,105 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+type WordTimestamp = {
+  word: string;
+  start: number;
+  end: number;
+};
+
+type AiScene = {
+  scene_number: number;
+  start_time: number;
+  end_time: number;
+  visual_prompt: string;
+};
+
+function cleanJoinedWords(text: string) {
+  return text
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/\(\s+/g, "(")
+    .replace(/\s+\)/g, ")")
+    .replace(/\s+"/g, '"')
+    .replace(/"\s+/g, '"')
+    .replace(/\s+'/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildNarrationFromTimestamps(words: WordTimestamp[], start: number, end: number) {
+  // Include words whose timestamps overlap the interval (more robust than strict containment)
+  const inRange = words.filter((w) => w.start < end && w.end > start);
+  const joined = inRange.map((w) => w.word).join(" ");
+  return cleanJoinedWords(joined);
+}
+
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
     const { projectId, transcript, audioDuration } = await req.json();
-    
+
     if (!projectId || !transcript) {
-      throw new Error('Missing projectId or transcript');
+      throw new Error("Missing projectId or transcript");
     }
 
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
+    const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
     if (!lovableApiKey) {
-      throw new Error('LOVABLE_API_KEY is not configured');
+      throw new Error("LOVABLE_API_KEY is not configured");
     }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
 
     console.log(`Generating scenes for project ${projectId}`);
     console.log(`Transcript length: ${transcript.length} characters`);
     console.log(`Audio duration: ${audioDuration}s`);
 
+    // Pull word timestamps so we can build FULL narration per scene without AI truncation.
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("word_timestamps")
+      .eq("id", projectId)
+      .single();
+
+    if (projectError) {
+      throw new Error(`Project not found: ${projectError.message}`);
+    }
+
+    const wordTimestamps: WordTimestamp[] = Array.isArray(project?.word_timestamps)
+      ? project.word_timestamps
+      : [];
+
+    console.log(`Word timestamps available: ${wordTimestamps.length}`);
+
     // Calculate target number of scenes - MAX 10 scenes for stories up to 2 hours
     // For a 2-hour (7200s) audio, that's 720s (12 min) per scene minimum
     const rawScenes = Math.ceil((audioDuration || 60) / 600); // ~10 min per scene baseline
     const targetScenes = Math.min(10, Math.max(1, rawScenes));
-    console.log(`Target scenes: ${targetScenes} (max 10, aiming for ${Math.round((audioDuration || 60) / targetScenes / 60)} min each)`);
+    console.log(
+      `Target scenes: ${targetScenes} (max 10, aiming for ${Math.round(
+        (audioDuration || 60) / targetScenes / 60,
+      )} min each)`,
+    );
 
-    const systemPrompt = `You are a video scene breakdown expert for long-form storytelling. Your job is to break down narration transcripts into MEANINGFUL story scenes.
+    // IMPORTANT: We do NOT ask the model to return the narration text (too long → truncation/"...").
+    // Instead: model returns timings + visual prompts, then we derive full narration from timestamps.
+    const systemPrompt = `You are a video scene breakdown expert for long-form storytelling.
 
-CRITICAL RULES:
+Your job is to break down a narration transcript into MEANINGFUL story scenes.
+
+ABSOLUTE CRITICAL RULES:
 - Create a MAXIMUM of ${targetScenes} scenes (fewer is better if natural)
-- Each scene should represent a MAJOR story beat, theme change, or narrative shift
-- Scenes should be 5-20 MINUTES long for 1.5-2 hour stories
-- DO NOT create scenes for every paragraph - combine related content into cohesive scenes
-
-For each scene, provide:
-1. Scene number (starting from 1)
-2. Start and end timestamps (in seconds) - these should cover LONG durations
-3. The narration text for that scene (can be long - multiple paragraphs)
-4. A detailed visual prompt for the MAIN imagery of that scene
-
-Guidelines for visual prompts:
-- Be specific and descriptive (lighting, mood, composition, style)
-- Use cinematic language (wide shot, close-up, establishing shot)
-- Include atmosphere details (dark, moody, dramatic, ethereal)
-- Mention art style when appropriate (photorealistic, cinematic, illustration)
-- Keep prompts 50-100 words each
-- Focus on the CORE visual theme of the scene
+- Scenes should represent MAJOR story beats, theme changes, or narrative shifts
+- Scenes should be long (5-20 minutes for 1.5-2 hour stories)
+- NEVER return narration text (it is too long and gets truncated). Only return timings + a visual prompt.
 
 Return ONLY valid JSON in this exact format:
 {
@@ -62,8 +109,7 @@ Return ONLY valid JSON in this exact format:
       "scene_number": 1,
       "start_time": 0,
       "end_time": 600,
-      "narration": "The combined narration text for this entire scene segment",
-      "visual_prompt": "Detailed visual description for the primary image of this scene"
+      "visual_prompt": "Detailed visual description for the primary image of this scene (50-100 words)"
     }
   ]
 }`;
@@ -74,137 +120,162 @@ CRITICAL REQUIREMENTS:
 - Maximum ${targetScenes} scenes (NEVER more)
 - Each scene should be ${Math.round((audioDuration || 60) / targetScenes / 60)}-${Math.round((audioDuration || 60) / targetScenes / 60) + 5} minutes long minimum
 - Split ONLY at major story beats, theme changes, or narrative shifts
-- Combine paragraphs that share the same topic/theme into ONE scene
+- Output start/end times in seconds
 
 TRANSCRIPT:
 ${transcript}
 
-Remember:
-- Fewer, longer scenes are better than many short scenes
-- Each scene represents a CHAPTER or MAJOR SECTION of the story
-- Visual prompts should capture the essence/mood of that entire section
-- Return ONLY the JSON, no other text`;
+Return ONLY the JSON, no other text.`;
 
-    console.log('Calling Lovable AI...');
+    console.log("Calling Lovable AI for scene boundaries + prompts...");
 
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${lovableApiKey}`,
-        'Content-Type': 'application/json',
+        Authorization: `Bearer ${lovableApiKey}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: 'google/gemini-3-flash-preview',
+        model: "openai/gpt-5-mini",
         messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
         ],
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('AI API error:', errorText);
+      console.error("AI API error:", errorText);
       throw new Error(`AI API error: ${response.status}`);
     }
 
     const aiResult = await response.json();
     const content = aiResult.choices?.[0]?.message?.content;
-    
+
     if (!content) {
-      throw new Error('No content in AI response');
+      throw new Error("No content in AI response");
     }
 
-    console.log('AI response received, parsing...');
+    console.log("AI response received, parsing...");
 
-    // Parse the JSON from the response
-    let scenesData;
+    let scenesData: { scenes: AiScene[] };
     try {
-      // Try to extract JSON from the response
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         scenesData = JSON.parse(jsonMatch[0]);
       } else {
-        throw new Error('No JSON found in response');
+        throw new Error("No JSON found in response");
       }
     } catch (parseError) {
-      console.error('Parse error:', parseError);
-      console.error('Raw content:', content);
-      throw new Error('Failed to parse AI response as JSON');
+      console.error("Parse error:", parseError);
+      console.error("Raw content:", content);
+      throw new Error("Failed to parse AI response as JSON");
     }
 
     if (!scenesData.scenes || !Array.isArray(scenesData.scenes)) {
-      throw new Error('Invalid scenes data structure');
+      throw new Error("Invalid scenes data structure");
     }
 
     console.log(`Parsed ${scenesData.scenes.length} scenes`);
 
-    // Save scenes to database
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    // Basic normalization/guardrails
+    const duration = Number(audioDuration || 0);
+    const normalizedScenes = scenesData.scenes
+      .map((s, idx) => {
+        const sceneNumber = Number(s.scene_number || idx + 1);
+        const start = Math.max(0, Number(s.start_time || 0));
+        const end = Math.max(start, Number(s.end_time || start));
+        const prompt = String(s.visual_prompt || "").trim();
+        return { scene_number: sceneNumber, start_time: start, end_time: end, visual_prompt: prompt };
+      })
+      .sort((a, b) => a.start_time - b.start_time);
 
-    // Delete existing scenes for this project
-    const { error: deleteError } = await supabase
-      .from('scenes')
-      .delete()
-      .eq('project_id', projectId);
-
-    if (deleteError) {
-      console.error('Delete error:', deleteError);
+    if (normalizedScenes.length === 0) {
+      throw new Error("AI returned zero scenes");
     }
 
-    // Insert new scenes
-    const scenesToInsert = scenesData.scenes.map((scene: any) => ({
-      project_id: projectId,
-      scene_number: scene.scene_number,
-      scene_type: 'image',
-      start_time: scene.start_time,
-      end_time: scene.end_time,
-      narration: scene.narration,
-      visual_prompt: scene.visual_prompt,
-      transition: 'crossfade',
-    }));
+    // Force coverage of the whole audio timeline if we have a known duration
+    normalizedScenes[0].start_time = 0;
+    if (duration > 0) {
+      normalizedScenes[normalizedScenes.length - 1].end_time = duration;
+    }
+
+    // Derive FULL narration per scene from word timestamps (preferred)
+    const scenesToInsert = normalizedScenes.map((s) => {
+      let narration = "";
+
+      if (wordTimestamps.length > 0) {
+        narration = buildNarrationFromTimestamps(wordTimestamps, s.start_time, s.end_time);
+      }
+
+      // Fallback when timestamps are missing: keep narration non-empty (rough split by proportion)
+      if (!narration) {
+        const total = Math.max(1, duration || 1);
+        const startRatio = s.start_time / total;
+        const endRatio = s.end_time / total;
+        const startIdx = Math.floor(transcript.length * startRatio);
+        const endIdx = Math.max(startIdx + 1, Math.floor(transcript.length * endRatio));
+        narration = transcript.slice(startIdx, endIdx).trim();
+      }
+
+      return {
+        project_id: projectId,
+        scene_number: s.scene_number,
+        scene_type: "image",
+        start_time: s.start_time,
+        end_time: s.end_time,
+        narration,
+        visual_prompt: s.visual_prompt,
+        transition: "crossfade",
+      };
+    });
+
+    // Delete existing scenes for this project
+    const { error: deleteError } = await supabase.from("scenes").delete().eq("project_id", projectId);
+    if (deleteError) {
+      console.error("Delete error:", deleteError);
+    }
 
     const { data: insertedScenes, error: insertError } = await supabase
-      .from('scenes')
+      .from("scenes")
       .insert(scenesToInsert)
       .select();
 
     if (insertError) {
-      console.error('Insert error:', insertError);
+      console.error("Insert error:", insertError);
       throw new Error(`Failed to save scenes: ${insertError.message}`);
     }
 
-    // Update project status
-    const { error: updateError } = await supabase
-      .from('projects')
-      .update({ status: 'ready' })
-      .eq('id', projectId);
-
+    const { error: updateError } = await supabase.from("projects").update({ status: "ready" }).eq("id", projectId);
     if (updateError) {
-      console.error('Update error:', updateError);
+      console.error("Update error:", updateError);
     }
 
     console.log(`Successfully created ${insertedScenes?.length} scenes`);
 
-    return new Response(JSON.stringify({
-      success: true,
-      scenes: insertedScenes,
-      count: insertedScenes?.length || 0,
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-
+    return new Response(
+      JSON.stringify({
+        success: true,
+        scenes: insertedScenes,
+        count: insertedScenes?.length || 0,
+      }),
+      {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('Scene generation error:', error);
-    return new Response(JSON.stringify({ 
-      error: errorMessage,
-      success: false,
-    }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    console.error("Scene generation error:", error);
+    return new Response(
+      JSON.stringify({
+        error: errorMessage,
+        success: false,
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
   }
 });
