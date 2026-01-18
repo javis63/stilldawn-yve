@@ -1,4 +1,5 @@
 import { Scene } from "@/types/project";
+import JSZip from "jszip";
 
 export interface WordTimestamp {
   word: string;
@@ -306,4 +307,198 @@ export async function downloadAllImages(
       await new Promise(resolve => setTimeout(resolve, 300));
     }
   }
+}
+
+/**
+ * Generate FCPXML for Final Cut Pro / DaVinci Resolve import
+ */
+export function generateFCPXML(projectTitle: string, scenes: Scene[], audioDuration: number, audioFilename: string): string {
+  const fps = 24;
+  const frameRate = `${fps}/1s`;
+  
+  const secondsToFCPTime = (seconds: number): string => {
+    const frames = Math.round(seconds * fps);
+    return `${frames}/${fps}s`;
+  };
+
+  const totalFrames = Math.ceil(audioDuration * fps);
+  
+  let clipItems = '';
+  scenes.forEach((scene, index) => {
+    const filename = `${(index + 1).toString().padStart(3, '0')}_scene.jpg`;
+    const startFrames = Math.round(scene.start_time * fps);
+    const durationFrames = Math.round((scene.end_time - scene.start_time) * fps);
+    
+    clipItems += `
+        <clip name="${filename}" offset="${secondsToFCPTime(scene.start_time)}" duration="${secondsToFCPTime(scene.end_time - scene.start_time)}">
+          <video ref="r${index + 2}" offset="0s" duration="${secondsToFCPTime(scene.end_time - scene.start_time)}">
+            <param name="Ken Burns" key="crop" value="1 0 0 0"/>
+          </video>
+        </clip>`;
+  });
+
+  let resourceRefs = `
+    <asset id="r1" name="${audioFilename}" src="file://./${audioFilename}" duration="${secondsToFCPTime(audioDuration)}" hasAudio="1"/>`;
+  
+  scenes.forEach((scene, index) => {
+    const filename = `${(index + 1).toString().padStart(3, '0')}_scene.jpg`;
+    resourceRefs += `
+    <asset id="r${index + 2}" name="${filename}" src="file://./images/${filename}" duration="${secondsToFCPTime(scene.end_time - scene.start_time)}" hasVideo="1"/>`;
+  });
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.9">
+  <resources>${resourceRefs}
+  </resources>
+  <library>
+    <event name="${projectTitle}">
+      <project name="${projectTitle}">
+        <sequence duration="${secondsToFCPTime(audioDuration)}" format="r0">
+          <spine>
+            <gap name="Gap" offset="0s" duration="${secondsToFCPTime(audioDuration)}">
+              <audio-channel-source srcCh="1, 2" outCh="L, R"/>
+            </gap>${clipItems}
+          </spine>
+          <audio-role-source role="dialogue" offset="0s" duration="${secondsToFCPTime(audioDuration)}">
+            <clip name="${audioFilename}" offset="0s" duration="${secondsToFCPTime(audioDuration)}">
+              <audio ref="r1" offset="0s" duration="${secondsToFCPTime(audioDuration)}"/>
+            </clip>
+          </audio-role-source>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>`;
+}
+
+/**
+ * Download a complete ZIP bundle for DaVinci Resolve
+ * Includes: EDL, FCPXML, CSV, images folder, subtitles, and optionally audio
+ */
+export async function downloadDaVinciBundle(
+  projectTitle: string,
+  scenes: Scene[],
+  wordTimestamps: WordTimestamp[],
+  audioUrl: string | null,
+  audioDuration: number,
+  onProgress?: (stage: string, current: number, total: number) => void
+): Promise<void> {
+  const zip = new JSZip();
+  const safeName = projectTitle.replace(/[^a-zA-Z0-9]/g, '_');
+  
+  // Get audio filename
+  const audioFilename = audioUrl ? `${safeName}_audio.mp3` : '';
+  
+  onProgress?.('Creating project files', 0, 5);
+  
+  // Add EDL
+  const edl = generateEDL(projectTitle, scenes);
+  zip.file(`${safeName}.edl`, edl);
+  
+  // Add FCPXML
+  const fcpxml = generateFCPXML(projectTitle, scenes, audioDuration, audioFilename);
+  zip.file(`${safeName}.fcpxml`, fcpxml);
+  
+  // Add CSV
+  const csv = generateSceneCSV(projectTitle, scenes);
+  zip.file(`${safeName}_scenes.csv`, csv);
+  
+  onProgress?.('Creating project files', 1, 5);
+  
+  // Add subtitles
+  if (wordTimestamps.length > 0) {
+    const srt = generateSRT(wordTimestamps);
+    zip.file(`${safeName}.srt`, srt);
+    
+    const vtt = generateVTT(wordTimestamps);
+    zip.file(`${safeName}.vtt`, vtt);
+  }
+  
+  onProgress?.('Creating project files', 2, 5);
+  
+  // Add images folder
+  const images = getSceneImages(scenes);
+  const imagesFolder = zip.folder('images');
+  
+  for (let i = 0; i < images.length; i++) {
+    const { filename, url } = images[i];
+    onProgress?.('Downloading images', i + 1, images.length);
+    
+    const blob = await downloadImageAsBlob(url);
+    if (blob && imagesFolder) {
+      imagesFolder.file(filename, blob);
+    }
+  }
+  
+  onProgress?.('Downloading audio', 0, 1);
+  
+  // Add audio file if available
+  if (audioUrl) {
+    try {
+      const audioResponse = await fetch(audioUrl);
+      if (audioResponse.ok) {
+        const audioBlob = await audioResponse.blob();
+        zip.file(audioFilename, audioBlob);
+      }
+    } catch (e) {
+      console.warn('Failed to include audio in bundle:', e);
+    }
+  }
+  
+  onProgress?.('Generating ZIP', 1, 1);
+  
+  // Add README with instructions
+  const readme = `# ${projectTitle} - DaVinci Resolve Import Instructions
+
+## Files Included:
+- ${safeName}.edl - Edit Decision List (timeline)
+- ${safeName}.fcpxml - Final Cut Pro XML (alternative timeline format)
+- ${safeName}_scenes.csv - Scene reference list
+- ${safeName}.srt - SRT subtitles
+- ${safeName}.vtt - VTT subtitles
+- images/ - All scene images (numbered)
+${audioUrl ? `- ${audioFilename} - Audio track` : ''}
+
+## Import to DaVinci Resolve:
+
+### Method 1: Using EDL
+1. File → Import → Timeline (Import AAF, EDL, XML)
+2. Select the .edl file
+3. Import your images folder to the Media Pool
+4. Right-click timeline → Reconform from Bins
+5. DaVinci will match images by filename
+
+### Method 2: Using FCPXML  
+1. File → Import → Timeline (Import AAF, EDL, XML)
+2. Select the .fcpxml file
+3. Make sure images folder is in same location as FCPXML
+4. Media should auto-link
+
+### Adding Audio:
+1. Import ${audioFilename || 'your audio file'} to Media Pool
+2. Drag to audio track on timeline
+3. Align to start (00:00:00:00)
+
+### Adding Subtitles:
+1. File → Import → Subtitle
+2. Select the .srt file
+3. Subtitles will appear on subtitle track
+
+## Timecode Reference:
+Frame rate: 24fps
+`;
+
+  zip.file('README.txt', readme);
+  
+  // Generate and download ZIP
+  const content = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(content);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${safeName}_DaVinci_Bundle.zip`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
