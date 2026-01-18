@@ -22,7 +22,7 @@ import shutil
 from flask import jsonify, request
 
 # Your API key for authentication
-VPS_API_KEY = "T6ELEzKycQ5zKBiTcVhccaNi7Ldynl9PcRlwmyGFac257a17"
+VPS_API_KEY = "OZEiHTtn4exZrBXMdA3UDKyODupExRDW3Q3mDSgL4125e637"
 
 # Store render job status
 render_jobs = {}
