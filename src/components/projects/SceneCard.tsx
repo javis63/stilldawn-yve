@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +22,8 @@ import {
   Copy,
   Check,
   Loader2,
+  Pencil,
+  Save,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Scene, TransitionType } from "@/types/project";
@@ -79,6 +82,10 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
   const [copiedPrompt, setCopiedPrompt] = useState<number | null>(null);
   const [partsExpanded, setPartsExpanded] = useState(true);
   const [narrationExpanded, setNarrationExpanded] = useState(false);
+  const [editingNarration, setEditingNarration] = useState(false);
+  const [narrationText, setNarrationText] = useState(scene.narration);
+  const [savingNarration, setSavingNarration] = useState(false);
+  const [generatingPrompt, setGeneratingPrompt] = useState(false);
 
   // Get all images (combine image_url with image_urls array)
   const getAllImages = (): string[] => {
@@ -119,6 +126,51 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
       toast.error(error.message || 'Failed to generate parts');
     } finally {
       setGeneratingParts(false);
+    }
+  };
+
+  const handleSaveNarration = async () => {
+    setSavingNarration(true);
+    try {
+      const { error } = await supabase
+        .from("scenes")
+        .update({ narration: narrationText })
+        .eq("id", scene.id);
+
+      if (error) throw error;
+
+      toast.success("Script saved");
+      setEditingNarration(false);
+      onUpdate();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to save script");
+    } finally {
+      setSavingNarration(false);
+    }
+  };
+
+  const handleGeneratePromptFromScript = async () => {
+    if (!narrationText.trim()) {
+      toast.error("Please enter a script first");
+      return;
+    }
+
+    setGeneratingPrompt(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-visual-prompt', {
+        body: { sceneId: scene.id, narration: narrationText }
+      });
+
+      if (error) throw error;
+      if (!data.success) throw new Error(data.error || 'Failed to generate prompt');
+
+      toast.success("Visual prompt generated");
+      onUpdate();
+    } catch (error: any) {
+      console.error('Prompt generation error:', error);
+      toast.error(error.message || 'Failed to generate visual prompt');
+    } finally {
+      setGeneratingPrompt(false);
     }
   };
 
@@ -485,29 +537,128 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
               )}
             </div>
 
-            {/* Narration Text */}
-            <div className="space-y-2">
+            {/* Script/Narration Section */}
+            <div className="space-y-3 border border-border rounded-lg p-4 bg-muted/20">
               <div className="flex items-center justify-between gap-3">
-                <label className="text-sm font-medium text-foreground">Narration</label>
+                <div className="flex items-center gap-2">
+                  <Pencil className="h-4 w-4 text-muted-foreground" />
+                  <label className="text-sm font-medium text-foreground">Script</label>
+                  <span className="text-xs text-muted-foreground">(editable)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setNarrationExpanded((v) => !v)}
+                  >
+                    {narrationExpanded ? "Collapse" : "Expand"}
+                  </Button>
+                  {!editingNarration ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setEditingNarration(true)}
+                    >
+                      <Pencil className="h-3 w-3 mr-1" />
+                      Edit
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={handleSaveNarration}
+                      disabled={savingNarration}
+                    >
+                      {savingNarration ? (
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      ) : (
+                        <Save className="h-3 w-3 mr-1" />
+                      )}
+                      Save
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {editingNarration ? (
+                <Textarea
+                  value={narrationText}
+                  onChange={(e) => setNarrationText(e.target.value)}
+                  placeholder="Paste your script here..."
+                  className={
+                    narrationExpanded
+                      ? "min-h-[60vh] font-mono text-sm"
+                      : "min-h-48 font-mono text-sm"
+                  }
+                />
+              ) : (
+                <ScrollArea className={
+                  narrationExpanded
+                    ? "h-[60vh] rounded-md border border-border bg-muted/50"
+                    : "h-48 rounded-md border border-border bg-muted/50"
+                }>
+                  <div className="p-3 text-sm text-muted-foreground whitespace-pre-wrap">
+                    {scene.narration || <span className="italic text-muted-foreground/50">No script yet. Click Edit to add one.</span>}
+                  </div>
+                </ScrollArea>
+              )}
+
+              {/* Visual Prompt Display + Generate Button */}
+              <div className="flex items-center gap-2 pt-2 border-t border-border">
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => setNarrationExpanded((v) => !v)}
+                  onClick={handleGeneratePromptFromScript}
+                  disabled={generatingPrompt || !narrationText.trim()}
+                  className="h-8"
                 >
-                  {narrationExpanded ? "Collapse" : "Expand"}
+                  {generatingPrompt ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4 mr-1" />
+                      Generate Visual Prompt
+                    </>
+                  )}
                 </Button>
+                <span className="text-xs text-muted-foreground">
+                  Creates an AI visual prompt from your script
+                </span>
               </div>
-              <ScrollArea className={
-                narrationExpanded
-                  ? "h-[60vh] rounded-md border border-border bg-muted/50"
-                  : "h-48 rounded-md border border-border bg-muted/50"
-              }>
-                <div className="p-3 text-sm text-muted-foreground whitespace-pre-wrap">
-                  {scene.narration}
+
+              {scene.visual_prompt && (
+                <div className="bg-primary/5 border border-primary/20 rounded-md p-3 mt-2">
+                  <div className="flex items-start gap-2">
+                    <Palette className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-xs text-muted-foreground mb-1">Generated Visual Prompt:</p>
+                      <p className="text-sm text-primary">{scene.visual_prompt}</p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 flex-shrink-0"
+                      onClick={() => handleCopyPrompt(scene.visual_prompt || '', 0)}
+                    >
+                      {copiedPrompt === 0 ? (
+                        <Check className="h-3 w-3 text-green-500" />
+                      ) : (
+                        <Copy className="h-3 w-3 text-muted-foreground" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
-              </ScrollArea>
+              )}
             </div>
 
             {/* Multiple Images Section with Duration Controls */}
