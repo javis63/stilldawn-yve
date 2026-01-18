@@ -179,11 +179,18 @@ def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, project_id
             segment_video = os.path.join(work_dir, f'segment_{i:03d}.mp4')
             dur = segment['duration']
             
+            # Debug: Check if image exists
+            img_path = segment['image']
+            if not os.path.exists(img_path):
+                raise Exception(f"Image file not found: {img_path}")
+            
+            print(f"[DEBUG] Processing segment {i}: image={img_path}, duration={dur}s")
+            
             # Simple static image - scale to 1080p and hold for duration
             cmd = [
                 'ffmpeg', '-y',
                 '-loop', '1',
-                '-i', segment['image'],
+                '-i', img_path,
                 '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black',
                 '-t', str(dur),
                 '-c:v', 'libx264',
@@ -194,11 +201,18 @@ def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, project_id
                 segment_video
             ]
             
+            print(f"[DEBUG] FFmpeg cmd: {' '.join(cmd)}")
+            
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             if result.returncode != 0:
-                print(f"FFmpeg segment error: {result.stderr}")
-                raise Exception(f"FFmpeg segment render failed: {result.stderr[:500]}")
+                # Get actual error from stderr (skip the version banner)
+                stderr_lines = result.stderr.strip().split('\n')
+                # Get last 10 lines which usually contain the actual error
+                error_msg = '\n'.join(stderr_lines[-10:]) if len(stderr_lines) > 10 else result.stderr
+                print(f"[DEBUG] FFmpeg FAILED. Last 10 lines of stderr:\n{error_msg}")
+                raise Exception(f"FFmpeg segment render failed: {error_msg}")
             
+            print(f"[DEBUG] Segment {i} rendered successfully")
             segment_videos.append(segment_video)
         
         render_jobs[job_id]['progress'] = 60
