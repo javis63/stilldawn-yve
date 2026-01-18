@@ -111,22 +111,14 @@ def burn_subtitles(video_file, ass_file, output_file):
     return output_file
 
 
-def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, project_id, render_id):
+def render_video_with_ffmpeg(job_id, scenes, audio_url, supabase_url, supabase_key, project_id, render_id):
     """
     Render video using FFmpeg.
-    Reads SUPABASE_SERVICE_ROLE_KEY from /root/story-automation/uploads/.supabase_key file.
+    Supabase key is passed from the Lovable edge function.
     """
     try:
-        # Read service role key from file
-        key_file = '/root/story-automation/uploads/.supabase_key'
-        if not os.path.exists(key_file):
-            raise Exception(f"Supabase key file not found: {key_file}. Create it with your service role key.")
-        
-        with open(key_file, 'r') as f:
-            supabase_key = f.read().strip()
-        
         if not supabase_key:
-            raise Exception("Supabase key file is empty")
+            raise Exception("Supabase key not provided by edge function")
         render_jobs[job_id]['status'] = 'downloading'
         render_jobs[job_id]['message'] = 'Downloading assets...'
         
@@ -347,14 +339,13 @@ def register_lovable_endpoints(app):
             scenes = data.get('scenes', [])
             audio_url = data.get('audio_url')
             supabase_url = data.get('supabase_url')
+            supabase_key = data.get('supabase_key')  # Key passed from edge function
             
             if not all([project_id, render_id, scenes, audio_url, supabase_url]):
                 return jsonify({'error': 'Missing required fields'}), 400
             
-            # Check key file exists
-            key_file = '/root/story-automation/uploads/.supabase_key'
-            if not os.path.exists(key_file):
-                return jsonify({'error': f'Create {key_file} with your Supabase service role key'}), 500
+            if not supabase_key:
+                return jsonify({'error': 'supabase_key not provided in request'}), 400
             
             # Create job
             job_id = str(uuid.uuid4())
@@ -366,10 +357,10 @@ def register_lovable_endpoints(app):
                 'error': None
             }
             
-            # Start rendering in background
+            # Start rendering in background (pass supabase_key)
             thread = threading.Thread(
                 target=render_video_with_ffmpeg,
-                args=(job_id, scenes, audio_url, supabase_url, project_id, render_id)
+                args=(job_id, scenes, audio_url, supabase_url, supabase_key, project_id, render_id)
             )
             thread.daemon = True
             thread.start()
