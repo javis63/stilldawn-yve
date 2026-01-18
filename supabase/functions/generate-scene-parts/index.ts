@@ -91,13 +91,16 @@ Your task is to divide the given narration into ${targetParts} distinct parts ba
 - Logical paragraph or section breaks
 - Visual scene changes
 
-CRITICAL RULES:
+ABSOLUTE CRITICAL RULES - FAILURE TO FOLLOW WILL RESULT IN REJECTION:
 1. Each part MUST contain COMPLETE sentences. NEVER split a sentence between parts.
-2. Include the FULL narration text for each part - no truncation, no summaries.
-3. Every word from the original narration must appear in exactly one part.
+2. The "content" field MUST contain the COMPLETE, FULL, VERBATIM narration text for that part.
+3. NEVER truncate text. NEVER use "..." or ellipsis. NEVER summarize.
+4. NEVER abbreviate or shorten the narration in any way.
+5. Copy the EXACT words from the narration - every single word must appear.
+6. All parts combined must equal 100% of the original narration text with no missing words.
 
 For each part, provide:
-1. The EXACT and COMPLETE narration text for that part (full sentences only)
+1. The EXACT and COMPLETE narration text for that part (copy word-for-word, no truncation)
 2. A detailed visual prompt (50-80 words) describing a SINGLE cohesive image
 
 CRITICAL: You must return ONLY valid JSON in this exact format:
@@ -105,7 +108,7 @@ CRITICAL: You must return ONLY valid JSON in this exact format:
   "parts": [
     {
       "part_number": 1,
-      "content": "The exact and complete narration text for this part with full sentences...",
+      "content": "Copy the EXACT narration text here word-for-word. Include every sentence in full. Do not truncate or use ellipsis.",
       "visual_prompt": "Detailed visual description of a SINGLE image: lighting, mood, composition, style, camera angle..."
     }
   ]
@@ -121,10 +124,15 @@ Guidelines for visual prompts:
 
     const userPrompt = `Break this ${Math.round(sceneDuration / 60)} minute scene narration into exactly ${targetParts} logical parts.
 
-NARRATION:
+CRITICAL REMINDER: 
+- Copy the COMPLETE text for each part - every single word.
+- NEVER use "..." or truncate any text.
+- All parts combined = the full narration below.
+
+FULL NARRATION TO SPLIT (${narration.length} characters - all must be included):
 ${narration}
 
-Remember: Return ONLY the JSON, no other text. Each part should have distinct content and a unique visual prompt.`;
+Return ONLY the JSON. Each part must contain the full verbatim text for that segment.`;
 
     console.log('Calling Lovable AI for parts breakdown...');
 
