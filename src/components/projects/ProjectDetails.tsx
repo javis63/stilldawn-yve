@@ -22,6 +22,7 @@ import {
   FileVideo,
   FileText,
   Images,
+  Archive,
 } from "lucide-react";
 import { Project, Scene } from "@/types/project";
 import { supabase } from "@/integrations/supabase/client";
@@ -45,6 +46,7 @@ import {
   getSceneImages,
   generateSRT,
   generateVTT,
+  downloadDaVinciBundle,
   WordTimestamp,
 } from "@/utils/davinciExport";
 import { splitAudioIntoChunks, ChunkingProgress } from "@/utils/audioChunking";
@@ -620,8 +622,39 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>Export Options</DropdownMenuLabel>
+            <DropdownMenuLabel>Complete Bundle</DropdownMenuLabel>
+            <DropdownMenuItem
+              onClick={async () => {
+                if (scenes.length === 0) {
+                  toast.error('No scenes to export');
+                  return;
+                }
+                toast.info('Creating DaVinci bundle... This may take a moment.');
+                try {
+                  await downloadDaVinciBundle(
+                    currentProject.title,
+                    scenes,
+                    wordTimestamps,
+                    currentProject.audio_url,
+                    currentProject.audio_duration || 0,
+                    (stage, current, total) => {
+                      console.log(`${stage}: ${current}/${total}`);
+                    }
+                  );
+                  toast.success('DaVinci bundle downloaded!');
+                } catch (error) {
+                  console.error('Bundle error:', error);
+                  toast.error('Failed to create bundle');
+                }
+              }}
+              disabled={scenes.length === 0}
+              className="font-medium"
+            >
+              <Archive className="h-4 w-4 mr-2" />
+              Download ZIP Bundle (All Files)
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
+            <DropdownMenuLabel>Individual Files</DropdownMenuLabel>
             <DropdownMenuItem
               onClick={() => {
                 const edl = generateEDL(currentProject.title, scenes);
