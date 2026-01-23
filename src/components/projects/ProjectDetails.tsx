@@ -456,29 +456,25 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     }
   };
 
-  // Auto-generate images for all scenes using AI
+  // Auto-generate images for all scenes using AI (appends to existing images)
   const handleAutoGenerateImages = async () => {
     if (scenes.length === 0) {
       toast.error("No scenes available. Generate scenes first.");
       return;
     }
 
-    const scenesWithoutImages = scenes.filter(s => !s.image_url);
-    if (scenesWithoutImages.length === 0) {
-      toast.info("All scenes already have images. Clear existing images to regenerate.");
-      return;
-    }
-
+    // Always generate for all scenes - images will be appended and durations auto-distributed
     setProcessing("images");
-    setImageGenProgress({ current: 0, total: scenesWithoutImages.length });
-    toast.info(`Generating ${scenesWithoutImages.length} images with AI... This may take a few minutes.`);
+    setImageGenProgress({ current: 0, total: scenes.length });
+    toast.info(`Generating ${scenes.length} images with AI... Images will be added to existing ones with equal durations.`);
 
+    let successCount = 0;
     try {
-      for (let i = 0; i < scenesWithoutImages.length; i++) {
-        const scene = scenesWithoutImages[i];
-        setImageGenProgress({ current: i + 1, total: scenesWithoutImages.length });
+      for (let i = 0; i < scenes.length; i++) {
+        const scene = scenes[i];
+        setImageGenProgress({ current: i + 1, total: scenes.length });
         
-        toast.info(`Generating image ${i + 1} of ${scenesWithoutImages.length}...`);
+        toast.info(`Generating image ${i + 1} of ${scenes.length} for scene ${scene.scene_number}...`);
 
         const { data, error } = await supabase.functions.invoke('generate-scene-images', {
           body: {
@@ -499,12 +495,13 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           continue;
         }
 
-        toast.success(`Generated image for scene ${scene.scene_number}`);
+        successCount++;
+        toast.success(`Added image to scene ${scene.scene_number}`);
       }
 
       // Refresh scenes to show new images
       await fetchScenes();
-      toast.success(`Image generation complete! Generated ${scenesWithoutImages.length} images.`);
+      toast.success(`Image generation complete! Added ${successCount} images. Durations auto-distributed.`);
       onRefresh();
     } catch (error: any) {
       console.error("Image generation error:", error);
