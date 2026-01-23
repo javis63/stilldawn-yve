@@ -24,7 +24,9 @@ import {
   Images,
   Archive,
   Sparkles,
+  Users,
 } from "lucide-react";
+import echoCrewReference from "@/assets/character-locks/echo-crew-reference.png";
 import { Project, Scene } from "@/types/project";
 import { supabase } from "@/integrations/supabase/client";
 import { formatDistanceToNow } from "date-fns";
@@ -456,6 +458,45 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     }
   };
 
+  // Ensure reference image is uploaded to storage for AI consistency
+  const ensureReferenceImageUploaded = async () => {
+    const refPath = 'character-reference/echo-crew-reference.png';
+    
+    // Check if reference image already exists
+    const { data: existingFile } = await supabase.storage
+      .from('scene-images')
+      .list('character-reference', { limit: 1, search: 'echo-crew-reference.png' });
+    
+    if (existingFile && existingFile.length > 0) {
+      console.log("Reference image already exists in storage");
+      return true;
+    }
+    
+    // Upload the reference image from assets
+    try {
+      const response = await fetch(echoCrewReference);
+      const blob = await response.blob();
+      
+      const { error: uploadError } = await supabase.storage
+        .from('scene-images')
+        .upload(refPath, blob, {
+          contentType: 'image/png',
+          upsert: true,
+        });
+      
+      if (uploadError) {
+        console.error("Failed to upload reference image:", uploadError);
+        return false;
+      }
+      
+      console.log("Reference image uploaded successfully");
+      return true;
+    } catch (err) {
+      console.error("Error uploading reference image:", err);
+      return false;
+    }
+  };
+
   // Auto-generate images for all scenes using AI (appends to existing images)
   const handleAutoGenerateImages = async () => {
     if (scenes.length === 0) {
@@ -466,7 +507,12 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     // Always generate for all scenes - images will be appended and durations auto-distributed
     setProcessing("images");
     setImageGenProgress({ current: 0, total: scenes.length });
-    toast.info(`Generating ${scenes.length} images with AI... Images will be added to existing ones with equal durations.`);
+    
+    // Ensure reference image is uploaded first
+    toast.info("Preparing character reference for consistent AI generation...");
+    await ensureReferenceImageUploaded();
+    
+    toast.info(`Generating ${scenes.length} images with character consistency... Images will be added to existing ones.`);
 
     let successCount = 0;
     try {
@@ -481,6 +527,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
             projectId: currentProject.id,
             sceneId: scene.id,
             narration: scene.narration || scene.visual_prompt || `Scene ${scene.scene_number}`,
+            useReferenceImage: true, // Use reference image for character consistency
           },
         });
 
@@ -501,7 +548,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
 
       // Refresh scenes to show new images
       await fetchScenes();
-      toast.success(`Image generation complete! Added ${successCount} images. Durations auto-distributed.`);
+      toast.success(`Image generation complete! Added ${successCount} images with character consistency.`);
       onRefresh();
     } catch (error: any) {
       console.error("Image generation error:", error);
