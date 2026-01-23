@@ -50,6 +50,8 @@ import {
   generateSRT,
   generateVTT,
   downloadDaVinciBundle,
+  downloadFCPXMLFile,
+  downloadMediaFolder,
   WordTimestamp,
 } from "@/utils/davinciExport";
 import { splitAudioIntoChunks, ChunkingProgress } from "@/utils/audioChunking";
@@ -733,8 +735,62 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
               Export for DaVinci
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>Complete Bundle</DropdownMenuLabel>
+          <DropdownMenuContent align="end" className="w-64">
+            <DropdownMenuLabel>Recommended Workflow</DropdownMenuLabel>
+            <DropdownMenuItem
+              onClick={() => {
+                if (scenes.length === 0) {
+                  toast.error('No scenes to export');
+                  return;
+                }
+                downloadFCPXMLFile(
+                  currentProject.title,
+                  scenes,
+                  currentProject.audio_duration || 0,
+                  currentProject.audio_url
+                );
+                toast.success('FCPXML downloaded! Now download the Media folder.');
+              }}
+              disabled={scenes.length === 0}
+              className="font-medium"
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Step 1: Download Timeline (.fcpxml)
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={async () => {
+                if (scenes.length === 0) {
+                  toast.error('No scenes to export');
+                  return;
+                }
+                toast.info('Preparing media folder...');
+                try {
+                  await downloadMediaFolder(
+                    currentProject.title,
+                    scenes,
+                    currentProject.audio_url,
+                    (stage, current, total) => {
+                      console.log(`${stage}: ${current}/${total}`);
+                    }
+                  );
+                  toast.success('Media folder downloaded!');
+                } catch (error) {
+                  console.error('Media error:', error);
+                  toast.error('Failed to download media');
+                }
+              }}
+              disabled={scenes.length === 0}
+              className="font-medium"
+            >
+              <Archive className="h-4 w-4 mr-2" />
+              Step 2: Download Media Folder (.zip)
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">
+              Extract media ZIP, then in DaVinci: File → Import → Timeline → select .fcpxml → relink media to extracted folder
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Legacy Options</DropdownMenuLabel>
             <DropdownMenuItem
               onClick={async () => {
                 if (scenes.length === 0) {
@@ -760,10 +816,9 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
                 }
               }}
               disabled={scenes.length === 0}
-              className="font-medium"
             >
               <Archive className="h-4 w-4 mr-2" />
-              Download ZIP Bundle (All Files)
+              All-in-One ZIP Bundle
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Individual Files</DropdownMenuLabel>

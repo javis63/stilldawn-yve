@@ -312,6 +312,7 @@ export async function downloadAllImages(
 /**
  * Generate DaVinci Resolve compatible XML timeline
  * This format places images and audio directly on the timeline
+ * Media paths are relative - user must relink after import
  */
 export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioDuration: number, audioFilename: string): string {
   const fps = 24;
@@ -326,15 +327,14 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
   scenes.forEach((scene, index) => {
     const filename = `${(index + 1).toString().padStart(3, '0')}_scene.jpg`;
     const assetId = `asset_img_${index + 1}`;
-    const clipId = `clip_img_${index + 1}`;
     const startFrame = Math.round(scene.start_time * fps);
     const endFrame = Math.round(scene.end_time * fps);
     const durationFrames = endFrame - startFrame;
     
-    // Asset definition
+    // Asset definition - using relative path for relinking
     imageAssets += `
-      <asset id="${assetId}" name="${filename}" start="0" duration="${durationFrames}" hasVideo="1" format="r1">
-        <media-rep kind="original-media" src="images/${filename}"/>
+      <asset id="${assetId}" name="${filename}" start="0s" duration="${durationFrames}/24s" hasVideo="1" format="r1">
+        <media-rep kind="original-media" src="file://./${safeName}_Media/${filename}"/>
       </asset>`;
     
     // Clip on timeline
@@ -353,7 +353,7 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
     <format id="r2" name="FFAudioFormat48000" sampleRate="48000"/>
     ${imageAssets}
     <asset id="asset_audio" name="${audioFilename}" start="0s" duration="${audioDurationFrames}/24s" hasAudio="1" format="r2">
-      <media-rep kind="original-media" src="${audioFilename}"/>
+      <media-rep kind="original-media" src="file://./${safeName}_Media/${audioFilename}"/>
     </asset>
   </resources>
   <library location="file://./">
@@ -371,6 +371,76 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
     </event>
   </library>
 </fcpxml>`;
+}
+
+/**
+ * Download just the FCPXML file for DaVinci Resolve import
+ */
+export function downloadFCPXMLFile(
+  projectTitle: string,
+  scenes: Scene[],
+  audioDuration: number,
+  audioUrl: string | null
+): void {
+  const safeName = projectTitle.replace(/[^a-zA-Z0-9]/g, '_');
+  const audioFilename = audioUrl ? `${safeName}_audio.mp3` : '';
+  
+  const fcpxml = generateDaVinciXML(projectTitle, scenes, audioDuration, audioFilename);
+  downloadFile(fcpxml, `${safeName}.fcpxml`, 'application/xml');
+}
+
+/**
+ * Download the media folder as a ZIP (images + audio)
+ */
+export async function downloadMediaFolder(
+  projectTitle: string,
+  scenes: Scene[],
+  audioUrl: string | null,
+  onProgress?: (stage: string, current: number, total: number) => void
+): Promise<void> {
+  const zip = new JSZip();
+  const safeName = projectTitle.replace(/[^a-zA-Z0-9]/g, '_');
+  const audioFilename = `${safeName}_audio.mp3`;
+  
+  // Add images
+  const images = getSceneImages(scenes);
+  
+  for (let i = 0; i < images.length; i++) {
+    const { filename, url } = images[i];
+    onProgress?.('Downloading images', i + 1, images.length);
+    
+    const blob = await downloadImageAsBlob(url);
+    if (blob) {
+      zip.file(filename, blob);
+    }
+  }
+  
+  // Add audio file if available
+  if (audioUrl) {
+    onProgress?.('Downloading audio', 0, 1);
+    try {
+      const audioResponse = await fetch(audioUrl);
+      if (audioResponse.ok) {
+        const audioBlob = await audioResponse.blob();
+        zip.file(audioFilename, audioBlob);
+      }
+    } catch (e) {
+      console.warn('Failed to include audio in bundle:', e);
+    }
+  }
+  
+  onProgress?.('Generating ZIP', 1, 1);
+  
+  // Generate and download ZIP
+  const content = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(content);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${safeName}_Media.zip`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 /**
