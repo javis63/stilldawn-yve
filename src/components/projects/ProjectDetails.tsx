@@ -458,42 +458,23 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     }
   };
 
-  // Ensure reference image is uploaded to storage for AI consistency
-  const ensureReferenceImageUploaded = async () => {
-    const refPath = 'character-reference/echo-crew-reference.png';
-    
-    // Check if reference image already exists
-    const { data: existingFile } = await supabase.storage
-      .from('scene-images')
-      .list('character-reference', { limit: 1, search: 'echo-crew-reference.png' });
-    
-    if (existingFile && existingFile.length > 0) {
-      console.log("Reference image already exists in storage");
-      return true;
-    }
-    
-    // Upload the reference image from assets
+  // Convert reference image to base64 for AI consistency
+  const getRefenceImageBase64 = async (): Promise<string | null> => {
     try {
       const response = await fetch(echoCrewReference);
       const blob = await response.blob();
       
-      const { error: uploadError } = await supabase.storage
-        .from('scene-images')
-        .upload(refPath, blob, {
-          contentType: 'image/png',
-          upsert: true,
-        });
-      
-      if (uploadError) {
-        console.error("Failed to upload reference image:", uploadError);
-        return false;
-      }
-      
-      console.log("Reference image uploaded successfully");
-      return true;
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          resolve(reader.result as string);
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
     } catch (err) {
-      console.error("Error uploading reference image:", err);
-      return false;
+      console.error("Error loading reference image:", err);
+      return null;
     }
   };
 
@@ -508,11 +489,17 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     setProcessing("images");
     setImageGenProgress({ current: 0, total: scenes.length });
     
-    // Ensure reference image is uploaded first
+    // Get reference image as base64 for AI consistency
     toast.info("Preparing character reference for consistent AI generation...");
-    await ensureReferenceImageUploaded();
+    const referenceImageBase64 = await getRefenceImageBase64();
     
-    toast.info(`Generating ${scenes.length} images with character consistency... Images will be added to existing ones.`);
+    if (!referenceImageBase64) {
+      toast.warning("Could not load reference image. Generating without character reference.");
+    } else {
+      toast.success("Character reference loaded. Starting generation...");
+    }
+    
+    toast.info(`Generating ${scenes.length} images... Images will be added to existing ones.`);
 
     let successCount = 0;
     try {
@@ -527,7 +514,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
             projectId: currentProject.id,
             sceneId: scene.id,
             narration: scene.narration || scene.visual_prompt || `Scene ${scene.scene_number}`,
-            useReferenceImage: true, // Use reference image for character consistency
+            referenceImageBase64, // Send base64 reference image for character consistency
           },
         });
 

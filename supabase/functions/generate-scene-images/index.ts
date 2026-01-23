@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { decode as base64Decode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
+import { decode as base64Decode, encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -16,7 +16,7 @@ The same woman in every scene:
 • High cheekbones, sharp jawline, symmetrical face
 • Almond-shaped eyes, intense but controlled gaze
 • Minimal makeup, natural military-appropriate appearance
-• Brown hair pulled into a tight ponytail or low tactical bun
+• Brown hair pulled into a tight pontal or low tactical bun
 • Athletic, feminine, well-developed physique (fit, not exaggerated)
 • Mature presence, calm authority, experienced demeanor
 • NO changes to face shape, ethnicity, age range, or hair color
@@ -29,16 +29,13 @@ SUPPORTING CHARACTERS:
 All characters wear desert tan modern US military tactical uniforms with STILLDAWN patches and body armor.
 Cinematic, photorealistic, 16:9, 4K, no text, no logos.`;
 
-// Reference image URL for character consistency (hosted in storage)
-const REFERENCE_IMAGE_URL = "https://eofedcncgpcpvxoibkjm.supabase.co/storage/v1/object/public/scene-images/character-reference/echo-crew-reference.png";
-
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { projectId, sceneId, narration, characterLock, useReferenceImage = true } = await req.json();
+    const { projectId, sceneId, narration, characterLock, referenceImageBase64 } = await req.json();
 
     if (!projectId || !sceneId || !narration) {
       throw new Error("Missing projectId, sceneId, or narration");
@@ -58,23 +55,50 @@ serve(async (req) => {
     // Use provided character lock or default
     const charLock = characterLock || CHARACTER_LOCK;
 
-    // Build the image generation prompt
-    const imagePrompt = `Use the reference image to maintain exact character appearances.
-Keep the SAME faces, uniforms, and STILLDAWN patches as shown in the reference.
+    // Build different prompts based on whether we have a reference image
+    const hasReference = !!referenceImageBase64;
+    
+    const imagePrompt = hasReference 
+      ? `CRITICAL: Use the reference image to maintain EXACT character appearances.
+The reference shows the 4 main characters - keep their IDENTICAL faces, skin tones, hair, and uniforms.
 
 ${charLock}
 
 SCENE TO GENERATE:
 ${narration}
 
-Create a new scene showing these exact same characters in a different setting/action based on the scene description above.
-Maintain identical faces, hair, skin tones, uniforms, and patches.
-Cinematic composition, photorealistic, 16:9 aspect ratio, dramatic lighting.
-No text overlays, no watermarks.`;
+Create a NEW scene showing these EXACT SAME characters (same faces, same uniforms with STILLDAWN patches) in the setting/action described above.
+Cinematic composition, photorealistic, 16:9 aspect ratio, dramatic military lighting.
+No text overlays, no watermarks, no logos.`
+      : `${charLock}
 
-    console.log("Calling Lovable AI for image generation with reference...");
+SCENE CONTEXT:
+${narration}
 
-    // Use image editing API with reference image for character consistency
+Generate a cinematic, photorealistic still image that visually represents this scene. 
+Wide establishing shot, 35mm lens, modern US military and intelligence environments.
+Dramatic lighting, film-like color grading, documentary realism.
+16:9 aspect ratio, 4K quality.
+No text, no logos, no watermarks.`;
+
+    console.log(`Calling Lovable AI for image generation (with reference: ${hasReference})...`);
+
+    // Build message content - with or without reference image
+    const messageContent = hasReference
+      ? [
+          {
+            type: "text",
+            text: imagePrompt,
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: referenceImageBase64, // Already a data URL from client
+            },
+          },
+        ]
+      : imagePrompt;
+
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -86,18 +110,7 @@ No text overlays, no watermarks.`;
         messages: [
           {
             role: "user",
-            content: useReferenceImage ? [
-              {
-                type: "text",
-                text: imagePrompt,
-              },
-              {
-                type: "image_url",
-                image_url: {
-                  url: REFERENCE_IMAGE_URL,
-                },
-              },
-            ] : imagePrompt,
+            content: messageContent,
           },
         ],
         modalities: ["image", "text"],
