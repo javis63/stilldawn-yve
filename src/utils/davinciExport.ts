@@ -395,11 +395,10 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
     const endFrame = Math.round(scene.end_time * fps);
     const durationFrames = endFrame - startFrame;
     
-    // Asset definition - use a *relative file URI*.
-    // DaVinci is more reliable at relinking when src parses as a URI.
+    // Asset definition - use bare filename for DaVinci name-based search/relink.
     imageAssets += `
       <asset id="${assetId}" name="${filename}" start="0s" duration="${durationFrames}/24s" hasVideo="1" format="r1">
-        <media-rep kind="original-media" src="file:./${filename}"/>
+        <media-rep kind="original-media" src="${filename}"/>
       </asset>`;
     
     // Clip on timeline
@@ -415,7 +414,7 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
   const audioResource = hasAudio
     ? `
     <asset id="asset_audio" name="${audioFilename}" start="0s" duration="${audioDurationFrames}/24s" hasAudio="1" format="r2">
-      <media-rep kind="original-media" src="file:./${audioFilename}"/>
+      <media-rep kind="original-media" src="${audioFilename}"/>
     </asset>`
     : "";
 
