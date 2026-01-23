@@ -230,13 +230,61 @@ export function downloadFile(content: string, filename: string, mimeType: string
 }
 
 /**
- * Download an image from URL and return as blob with proper filename
+ * Convert any image blob to real JPEG using canvas.
+ * DaVinci Resolve cannot decode WebP or other formats disguised as .jpg.
+ */
+async function convertToJpegBlob(blob: Blob): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(blob);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Canvas context unavailable'));
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob(
+        (jpgBlob) => {
+          if (jpgBlob) {
+            resolve(jpgBlob);
+          } else {
+            reject(new Error('toBlob returned null'));
+          }
+        },
+        'image/jpeg',
+        0.92
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Image load failed'));
+    };
+    img.src = objectUrl;
+  });
+}
+
+/**
+ * Download an image from URL and return as a true JPEG blob.
+ * This ensures DaVinci Resolve can read the file regardless of original format.
  */
 async function downloadImageAsBlob(url: string): Promise<Blob | null> {
   try {
     const response = await fetch(url);
     if (!response.ok) return null;
-    return await response.blob();
+    const originalBlob = await response.blob();
+
+    // Convert to real JPEG so the file matches its .jpg extension
+    try {
+      return await convertToJpegBlob(originalBlob);
+    } catch {
+      // Fallback: return original blob if conversion fails
+      return originalBlob;
+    }
   } catch {
     return null;
   }
