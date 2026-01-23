@@ -23,11 +23,14 @@ The same woman in every scene:
 
 SUPPORTING CHARACTERS:
 • Mason: Male, early-mid 30s, ruggedly handsome, short tactical haircut, light stubble, strong masculine build
-• Mercer: Male, early-mid 40s, Caucasian, handsome, battle-hardened, senior-operator presence
+• Mercer: Male, early-mid 40s, Caucasian, handsome, battle-hardened, senior-operator presence, salt-and-pepper short hair with neat gray beard
 • Senior Chief: Male, early-mid 50s, African American, short-cropped hair, mustache only (no beard)
 
-All characters wear desert tan modern US military tactical uniforms with body armor.
+All characters wear desert tan modern US military tactical uniforms with STILLDAWN patches and body armor.
 Cinematic, photorealistic, 16:9, 4K, no text, no logos.`;
+
+// Reference image URL for character consistency (hosted in storage)
+const REFERENCE_IMAGE_URL = "https://eofedcncgpcpvxoibkjm.supabase.co/storage/v1/object/public/scene-images/character-reference/echo-crew-reference.png";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -35,7 +38,7 @@ serve(async (req) => {
   }
 
   try {
-    const { projectId, sceneId, narration, characterLock } = await req.json();
+    const { projectId, sceneId, narration, characterLock, useReferenceImage = true } = await req.json();
 
     if (!projectId || !sceneId || !narration) {
       throw new Error("Missing projectId, sceneId, or narration");
@@ -56,19 +59,22 @@ serve(async (req) => {
     const charLock = characterLock || CHARACTER_LOCK;
 
     // Build the image generation prompt
-    const imagePrompt = `${charLock}
+    const imagePrompt = `Use the reference image to maintain exact character appearances.
+Keep the SAME faces, uniforms, and STILLDAWN patches as shown in the reference.
 
-SCENE CONTEXT:
+${charLock}
+
+SCENE TO GENERATE:
 ${narration}
 
-Generate a cinematic, photorealistic still image that visually represents this scene. 
-Wide establishing shot, 35mm lens, modern US military and intelligence environments.
-Dramatic lighting, film-like color grading, documentary realism.
-16:9 aspect ratio, 4K quality.
-No text, no logos, no watermarks.`;
+Create a new scene showing these exact same characters in a different setting/action based on the scene description above.
+Maintain identical faces, hair, skin tones, uniforms, and patches.
+Cinematic composition, photorealistic, 16:9 aspect ratio, dramatic lighting.
+No text overlays, no watermarks.`;
 
-    console.log("Calling Lovable AI for image generation...");
+    console.log("Calling Lovable AI for image generation with reference...");
 
+    // Use image editing API with reference image for character consistency
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -80,7 +86,18 @@ No text, no logos, no watermarks.`;
         messages: [
           {
             role: "user",
-            content: imagePrompt,
+            content: useReferenceImage ? [
+              {
+                type: "text",
+                text: imagePrompt,
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: REFERENCE_IMAGE_URL,
+                },
+              },
+            ] : imagePrompt,
           },
         ],
         modalities: ["image", "text"],
