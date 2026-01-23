@@ -242,6 +242,14 @@ async function downloadImageAsBlob(url: string): Promise<Blob | null> {
   }
 }
 
+function getPrimarySceneImageUrl(scene: Scene): string | null {
+  if (scene.image_url) return scene.image_url;
+  const imageUrls = (scene as any).image_urls as string[] | null | undefined;
+  if (!imageUrls || !Array.isArray(imageUrls)) return null;
+  const first = imageUrls.find(Boolean);
+  return first || null;
+}
+
 /**
  * Get all images from scenes with their numbered filenames
  */
@@ -250,27 +258,32 @@ export function getSceneImages(scenes: Scene[]): { filename: string; url: string
   
   scenes.forEach((scene, index) => {
     const prefix = (index + 1).toString().padStart(3, '0');
-    
-    // Check for primary image
-    if (scene.image_url) {
+
+    // Always ensure each scene has a "primary" image named like 001_scene.jpg.
+    // Some projects store images only in `image_urls` (and leave `image_url` null).
+    // DaVinci timeline generation expects 001_scene.jpg, 002_scene.jpg, etc.
+    const primaryUrl = getPrimarySceneImageUrl(scene);
+    if (primaryUrl) {
       images.push({
         filename: `${prefix}_scene.jpg`,
-        url: scene.image_url,
+        url: primaryUrl,
         sceneNumber: scene.scene_number,
       });
     }
-    
-    // Check for additional images in image_urls array
-    const imageUrls = (scene as any).image_urls as string[] | undefined;
+
+    // Additional images (if any)
+    const imageUrls = (scene as any).image_urls as string[] | null | undefined;
     if (imageUrls && Array.isArray(imageUrls)) {
-      imageUrls.forEach((url, imgIndex) => {
-        if (url && url !== scene.image_url) {
-          images.push({
-            filename: `${prefix}_scene_${(imgIndex + 1).toString().padStart(2, '0')}.jpg`,
-            url,
-            sceneNumber: scene.scene_number,
-          });
-        }
+      let extraIndex = 1;
+      imageUrls.forEach((url) => {
+        if (!url) return;
+        if (primaryUrl && url === primaryUrl) return;
+        images.push({
+          filename: `${prefix}_scene_${extraIndex.toString().padStart(2, '0')}.jpg`,
+          url,
+          sceneNumber: scene.scene_number,
+        });
+        extraIndex += 1;
       });
     }
   });
@@ -325,17 +338,20 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
   let imageClips = '';
   
   scenes.forEach((scene, index) => {
+    const primaryUrl = getPrimarySceneImageUrl(scene);
+    if (!primaryUrl) return;
+
     const filename = `${(index + 1).toString().padStart(3, '0')}_scene.jpg`;
     const assetId = `asset_img_${index + 1}`;
     const startFrame = Math.round(scene.start_time * fps);
     const endFrame = Math.round(scene.end_time * fps);
     const durationFrames = endFrame - startFrame;
     
-    // Asset definition - use just the filename so DaVinci will prompt to locate it.
-    // When user points to the folder containing media, it will auto-link all files.
+    // Asset definition - use a *relative file URI*.
+    // DaVinci is more reliable at relinking when src parses as a URI.
     imageAssets += `
       <asset id="${assetId}" name="${filename}" start="0s" duration="${durationFrames}/24s" hasVideo="1" format="r1">
-        <media-rep kind="original-media" src="${filename}"/>
+        <media-rep kind="original-media" src="file:./${filename}"/>
       </asset>`;
     
     // Clip on timeline
@@ -351,7 +367,7 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
   const audioResource = hasAudio
     ? `
     <asset id="asset_audio" name="${audioFilename}" start="0s" duration="${audioDurationFrames}/24s" hasAudio="1" format="r2">
-      <media-rep kind="original-media" src="${audioFilename}"/>
+      <media-rep kind="original-media" src="file:./${audioFilename}"/>
     </asset>`
     : "";
 
