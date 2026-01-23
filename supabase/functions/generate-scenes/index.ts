@@ -80,27 +80,26 @@ serve(async (req) => {
 
     console.log(`Word timestamps available: ${wordTimestamps.length}`);
 
-    // Calculate target number of scenes - MAX 10 scenes for stories up to 2 hours
-    // For a 2-hour (7200s) audio, that's 720s (12 min) per scene minimum
-    const rawScenes = Math.ceil((audioDuration || 60) / 600); // ~10 min per scene baseline
-    const targetScenes = Math.min(10, Math.max(1, rawScenes));
+    // FIXED: Always create exactly 4 scenes for the entire video
+    // Each image will be visible for 1/4 of the video duration with smooth transitions
+    const targetScenes = 4;
+    const sceneDuration = Math.round((audioDuration || 60) / targetScenes);
     console.log(
-      `Target scenes: ${targetScenes} (max 10, aiming for ${Math.round(
-        (audioDuration || 60) / targetScenes / 60,
-      )} min each)`,
+      `Target scenes: ${targetScenes} (fixed at 4 scenes, ~${Math.round(sceneDuration / 60)} min each)`,
     );
 
     // IMPORTANT: We do NOT ask the model to return the narration text (too long → truncation/"...").
     // Instead: model returns timings + visual prompts, then we derive full narration from timestamps.
     const systemPrompt = `You are a video scene breakdown expert for long-form storytelling.
 
-Your job is to break down a narration transcript into MEANINGFUL story scenes.
+Your job is to break down a narration transcript into EXACTLY 4 major story scenes.
 
 ABSOLUTE CRITICAL RULES:
-- Create a MAXIMUM of ${targetScenes} scenes (fewer is better if natural)
-- Scenes should represent MAJOR story beats, theme changes, or narrative shifts
-- Scenes should be long (5-20 minutes for 1.5-2 hour stories)
+- Create EXACTLY 4 scenes - no more, no less
+- Each scene should represent a MAJOR story beat, theme change, or narrative shift
+- Scenes should divide the story into 4 equal-ish parts with natural breakpoints
 - NEVER return narration text (it is too long and gets truncated). Only return timings + a visual prompt.
+- Visual prompts should be detailed and cinematic, describing the scene for image generation
 
 Return ONLY valid JSON in this exact format:
 {
@@ -108,19 +107,20 @@ Return ONLY valid JSON in this exact format:
     {
       "scene_number": 1,
       "start_time": 0,
-      "end_time": 600,
-      "visual_prompt": "Detailed visual description for the primary image of this scene (50-100 words)"
+      "end_time": ${Math.round((audioDuration || 60) / 4)},
+      "visual_prompt": "Detailed visual description for the primary image of this scene (50-100 words, cinematic, photorealistic)"
     }
   ]
 }`;
 
-    const userPrompt = `Break down this ${Math.round((audioDuration || 0) / 60)} minute narration into EXACTLY ${targetScenes} or fewer scenes.
+    const userPrompt = `Break down this ${Math.round((audioDuration || 0) / 60)} minute narration into EXACTLY 4 scenes.
 
 CRITICAL REQUIREMENTS:
-- Maximum ${targetScenes} scenes (NEVER more)
-- Each scene should be ${Math.round((audioDuration || 60) / targetScenes / 60)}-${Math.round((audioDuration || 60) / targetScenes / 60) + 5} minutes long minimum
-- Split ONLY at major story beats, theme changes, or narrative shifts
+- EXACTLY 4 scenes (no more, no less)
+- Each scene should be approximately ${Math.round((audioDuration || 60) / 4 / 60)} minutes long
+- Split at major story beats, theme changes, or narrative shifts
 - Output start/end times in seconds
+- Visual prompts should be detailed and cinematic for image generation
 
 TRANSCRIPT:
 ${transcript}

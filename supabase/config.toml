@@ -23,3 +23,6 @@ verify_jwt = false
 
 [functions.generate-visual-prompt]
 verify_jwt = false
+
+[functions.generate-scene-images]
+verify_jwt = false
