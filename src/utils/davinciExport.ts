@@ -310,66 +310,75 @@ export async function downloadAllImages(
 }
 
 /**
- * Generate FCPXML for Final Cut Pro / DaVinci Resolve import
+ * Generate DaVinci Resolve compatible XML timeline
+ * This format places images and audio directly on the timeline
  */
-export function generateFCPXML(projectTitle: string, scenes: Scene[], audioDuration: number, audioFilename: string): string {
+export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioDuration: number, audioFilename: string): string {
   const fps = 24;
-  const frameRate = `${fps}/1s`;
+  const width = 1920;
+  const height = 1080;
+  const safeName = projectTitle.replace(/[^a-zA-Z0-9]/g, '_');
   
-  const secondsToFCPTime = (seconds: number): string => {
-    const frames = Math.round(seconds * fps);
-    return `${frames}/${fps}s`;
-  };
-
-  const totalFrames = Math.ceil(audioDuration * fps);
+  // Build asset clips for images
+  let imageAssets = '';
+  let imageClips = '';
   
-  let clipItems = '';
   scenes.forEach((scene, index) => {
     const filename = `${(index + 1).toString().padStart(3, '0')}_scene.jpg`;
-    const startFrames = Math.round(scene.start_time * fps);
-    const durationFrames = Math.round((scene.end_time - scene.start_time) * fps);
+    const assetId = `asset_img_${index + 1}`;
+    const clipId = `clip_img_${index + 1}`;
+    const startFrame = Math.round(scene.start_time * fps);
+    const endFrame = Math.round(scene.end_time * fps);
+    const durationFrames = endFrame - startFrame;
     
-    clipItems += `
-        <clip name="${filename}" offset="${secondsToFCPTime(scene.start_time)}" duration="${secondsToFCPTime(scene.end_time - scene.start_time)}">
-          <video ref="r${index + 2}" offset="0s" duration="${secondsToFCPTime(scene.end_time - scene.start_time)}">
-            <param name="Ken Burns" key="crop" value="1 0 0 0"/>
-          </video>
-        </clip>`;
+    // Asset definition
+    imageAssets += `
+      <asset id="${assetId}" name="${filename}" start="0" duration="${durationFrames}" hasVideo="1" format="r1">
+        <media-rep kind="original-media" src="images/${filename}"/>
+      </asset>`;
+    
+    // Clip on timeline
+    imageClips += `
+          <asset-clip name="${filename}" ref="${assetId}" offset="${startFrame}/24s" duration="${durationFrames}/24s" start="0s" format="r1"/>`;
   });
-
-  let resourceRefs = `
-    <asset id="r1" name="${audioFilename}" src="file://./${audioFilename}" duration="${secondsToFCPTime(audioDuration)}" hasAudio="1"/>`;
   
-  scenes.forEach((scene, index) => {
-    const filename = `${(index + 1).toString().padStart(3, '0')}_scene.jpg`;
-    resourceRefs += `
-    <asset id="r${index + 2}" name="${filename}" src="file://./images/${filename}" duration="${secondsToFCPTime(scene.end_time - scene.start_time)}" hasVideo="1"/>`;
-  });
-
+  // Audio asset
+  const audioDurationFrames = Math.round(audioDuration * fps);
+  
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fcpxml>
-<fcpxml version="1.9">
-  <resources>${resourceRefs}
+<fcpxml version="1.10">
+  <resources>
+    <format id="r1" name="FFVideoFormat1080p24" frameDuration="1/24s" width="${width}" height="${height}"/>
+    <format id="r2" name="FFAudioFormat48000" sampleRate="48000"/>
+    ${imageAssets}
+    <asset id="asset_audio" name="${audioFilename}" start="0s" duration="${audioDurationFrames}/24s" hasAudio="1" format="r2">
+      <media-rep kind="original-media" src="${audioFilename}"/>
+    </asset>
   </resources>
-  <library>
-    <event name="${projectTitle}">
-      <project name="${projectTitle}">
-        <sequence duration="${secondsToFCPTime(audioDuration)}" format="r0">
+  <library location="file://./">
+    <event name="${safeName}">
+      <project name="${safeName}">
+        <sequence duration="${audioDurationFrames}/24s" format="r1" tcStart="0s" tcFormat="NDF">
           <spine>
-            <gap name="Gap" offset="0s" duration="${secondsToFCPTime(audioDuration)}">
-              <audio-channel-source srcCh="1, 2" outCh="L, R"/>
-            </gap>${clipItems}
+            <!-- Video Track - Images -->
+            ${imageClips}
           </spine>
-          <audio-role-source role="dialogue" offset="0s" duration="${secondsToFCPTime(audioDuration)}">
-            <clip name="${audioFilename}" offset="0s" duration="${secondsToFCPTime(audioDuration)}">
-              <audio ref="r1" offset="0s" duration="${secondsToFCPTime(audioDuration)}"/>
-            </clip>
-          </audio-role-source>
+          <!-- Audio Track -->
+          <asset-clip name="${audioFilename}" ref="asset_audio" lane="-1" offset="0s" duration="${audioDurationFrames}/24s" start="0s" format="r2"/>
         </sequence>
       </project>
     </event>
   </library>
 </fcpxml>`;
+}
+
+/**
+ * Generate FCPXML for Final Cut Pro / DaVinci Resolve import (legacy format)
+ */
+export function generateFCPXML(projectTitle: string, scenes: Scene[], audioDuration: number, audioFilename: string): string {
+  // Now just calls the new DaVinci-optimized version
+  return generateDaVinciXML(projectTitle, scenes, audioDuration, audioFilename);
 }
 
 /**
@@ -452,43 +461,48 @@ export async function downloadDaVinciBundle(
   const readme = `# ${projectTitle} - DaVinci Resolve Import Instructions
 
 ## Files Included:
-- ${safeName}.edl - Edit Decision List (timeline)
-- ${safeName}.fcpxml - Final Cut Pro XML (alternative timeline format)
+- ${safeName}.edl - Edit Decision List (legacy timeline)
+- ${safeName}.fcpxml - DaVinci Resolve Timeline (RECOMMENDED)
 - ${safeName}_scenes.csv - Scene reference list
 - ${safeName}.srt - SRT subtitles
 - ${safeName}.vtt - VTT subtitles
-- images/ - All scene images (numbered)
+- images/ - All scene images (numbered sequentially)
 ${audioUrl ? `- ${audioFilename} - Audio track` : ''}
 
-## Import to DaVinci Resolve:
+## QUICK IMPORT (Recommended):
 
-### Method 1: Using EDL
-1. File → Import → Timeline (Import AAF, EDL, XML)
-2. Select the .edl file
-3. Import your images folder to the Media Pool
-4. Right-click timeline → Reconform from Bins
-5. DaVinci will match images by filename
+### Step 1: Extract the ZIP
+Extract this ZIP file to a folder on your computer.
 
-### Method 2: Using FCPXML  
-1. File → Import → Timeline (Import AAF, EDL, XML)
-2. Select the .fcpxml file
-3. Make sure images folder is in same location as FCPXML
-4. Media should auto-link
+### Step 2: Import to DaVinci Resolve
+1. Open DaVinci Resolve
+2. File → Import → Timeline (or Import AAF, EDL, XML)
+3. Select the .fcpxml file
+4. When prompted about media, browse to the extracted folder
+5. DaVinci will auto-link the images from the "images" folder and the audio file
 
-### Adding Audio:
-1. Import ${audioFilename || 'your audio file'} to Media Pool
-2. Drag to audio track on timeline
-3. Align to start (00:00:00:00)
+### Step 3: Verify
+- Images should appear on Video Track 1, timed to narration
+- Audio should appear on Audio Track 1
+- Each image duration matches the script timing
 
 ### Adding Subtitles:
 1. File → Import → Subtitle
 2. Select the .srt file
-3. Subtitles will appear on subtitle track
+3. Subtitles will appear aligned with audio
 
-## Timecode Reference:
-Frame rate: 24fps
+## Troubleshooting:
+
+### Media Offline/Missing:
+1. Right-click the timeline → Relink Media
+2. Browse to the extracted folder
+3. Select "images" folder for images, root for audio
+
+### Timecode Reference:
+- Frame rate: 24fps
+- Resolution: 1920x1080
+- All timings are in frames (24fps)
 `;
-
   zip.file('README.txt', readme);
   
   // Generate and download ZIP
