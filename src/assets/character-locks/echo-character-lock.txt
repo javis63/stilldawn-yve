@@ -1,0 +1,464 @@
+CHARACTER LOCK — PRIMARY PROTAGONIST The same woman in every scene: • Adult American female, late 20s to early 30s (never teenage) • Strikingly beautiful, model-level facial structure • Very tan skin tone, warm bronze complexion • High cheekbones, sharp jawline, symmetrical face • Almond-shaped eyes, intense but controlled gaze • Minimal makeup, natural military-appropriate appearance • Brown hair pulled into a tight ponytail or low tactical bun • Athletic, feminine, well-developed physique (fit, not exaggerated) • Mature presence, calm authority, experienced demeanor • Ages subtly across the story: slightly more weathered, harder eyes over time • NO changes to face shape, ethnicity, age range, or hair color • Must always resemble the reference image provided by the user . Wide establishing shot, 35mm lens, modern US military and intelligence environments, consistent mature female protagonist appearance, cinematic, photorealistic, 16:9, 4K, no text, no logos
+
+
+You’re not asking it wrong — you’ve actually identified **two very specific failure modes** that image models fall into. Let me reset this cleanly and give you a **bullet-proof correction** so the next generation does exactly what you want.
+
+---
+
+## What’s going wrong (plain language)
+
+### 1️⃣ **Patch problem**
+
+The model is *hallucinating* a “similar” patch instead of **reusing the exact Stilldawn patch you supplied**.
+
+That happens unless you:
+
+* Explicitly tell it the patch is a **hard visual reference**
+* Forbid reinterpretation, simplification, or redesign
+* Specify **placement + scale + orientation + stitching**
+
+Right now it’s treating the patch as *concept art*, not *a literal object*.
+
+---
+
+### 2️⃣ **Echo’s rifle problem**
+
+When action + multiple characters are present, the model defaults to a **generic AR/M4 silhouette** unless the rifle is:
+
+* Explicitly named **every time**
+* Anchored to a **known sniper system**
+* Treated as a defining character attribute, not a prop
+
+Echo’s rifle must be **reasserted every generation**, or it will drift.
+
+---
+
+## The fix: how to ask it so it CANNOT drift
+
+Below is a **corrected, hardened prompt** you can paste directly.
+This is written to **eliminate reinterpretation entirely**.
+
+---
+
+## ✅ **CORRECTED MASTER PROMPT (PATCH + RIFLE LOCKED)**
+
+**Cinematic photorealistic still, 16:9, 4K.**
+
+Post-mission night scene in a stone village under moonlight.
+**Echo Vale** stands centered between three male operators (**Mason, Mercer, Senior Chief**), spacing clearly visible, all facing slightly toward camera.
+
+### 🔒 Echo Vale — HARD LOCK
+
+* Same face, facial structure, and proportions as the provided reference image (no changes)
+* Very tan bronze skin, high cheekbones, sharp jawline, almond-shaped eyes
+* Brown hair pulled back
+* Calm, controlled expression
+* **Wearing a modern desert-tan US tactical uniform**
+* **Primary weapon: precision sniper rifle (long-barrel sniper system, NOT M4, NOT carbine, NOT assault rifle)**
+  Rifle held in her established signature pose
+
+### 🔒 Supporting Characters
+
+* Mason, Mercer, and Senior Chief in matching desert-tan tactical uniforms
+* Helmets on (modern US military helmets)
+* Faces clean and realistic, distinct from each other and from Echo
+* Holding suppressed M4-style rifles
+* Same signature three-quarter stance, relaxed but alert
+
+---
+
+### 🔒 **PATCH RULE — ABSOLUTE**
+
+* **Use the EXACT Stilldawn patch from the provided image**
+* Patch must be:
+
+  * Identical shape, flame icon, text (“STILLDAWN”), texture, border stitching
+  * No redesign, no simplification, no reinterpretation
+  * Rendered as embroidered fabric sewn onto the uniform
+* **Placement:**
+
+  * Worn on the upper arm **directly below the US flag patch**
+  * Correct scale relative to the flag
+* **Failure conditions:**
+
+  * If the patch does not exactly match the provided Stilldawn patch, the image is incorrect
+
+---
+
+### Lighting & Camera
+
+* Moonlight mixed with warm village practical lights
+* Subtle haze, volumetric lighting
+* Cinematic contrast, restrained color grading
+* 35mm–50mm lens look
+* Documentary realism, no glam lighting
+
+**No text. No logos. No watermarks.**
+
+
+CHARACTER LOCK — ECHO VALE
+
+Same exact woman as the original Echo Vale reference image.
+Adult American female, late 20s–early 30s.
+Very tan bronze skin tone.
+Identical facial structure: high cheekbones, sharp jawline, almond-shaped eyes.
+Same nose, lips, eye spacing, and facial proportions as the reference.
+Brown hair pulled into a tight tactical ponytail.
+No changes to face shape, ethnicity, age, or attractiveness.
+Minimal makeup, natural skin texture, realistic lighting.
+
+Medium-wide shot, 35mm lens.
+Echo Vale seated alone in a quiet roadside café.
+Tactical jacket folded beside her on the seat, civilian stillness but alert posture.
+Sunlight cutting through dusty windows, particles in the air.
+Muted earth tones, restrained color grading.
+She is calm, observant, blending in without relaxing.
+
+Cinematic, photorealistic, documentary realism.
+16:9, 4K.
+No text. No logos.
+
+
+🔒 **CHARACTER LOCK CONFIRMED — MERCER & SENIOR CHIEF**
+
+Both characters are now **fully locked** as persistent, consistent figures across all future scenes. Their appearance, presence, and visual language will remain stable unless **you explicitly request changes**.
+
+---
+
+## 🔐 **LOCKED CHARACTER: MERCER**
+
+**Profile**
+
+* Male, early–mid 40s
+* Caucasian
+* Handsome, battle-hardened, senior-operator presence
+* Short tactical haircut, light stubble or close-cropped beard
+* Strong jawline, deep-set eyes, calm authority
+* Reads as command-level without insignia
+
+**Presence & Tone**
+
+* Quiet confidence
+* Strategist energy
+* Doesn’t posture — others defer naturally
+* Feels expensive, deliberate, dangerous when necessary
+
+**Visual Rules (Locked)**
+
+* Same desert tan modern tactical uniform as Echo & Mason
+* Body armor, correct US flag patch + STILLDAWN patch below
+* Suppressed M4-style rifle
+* **Signature pose:** three-quarter stance, rifle held diagonally across chest, muzzle down
+* Full-body framing preferred for introductions and command moments
+
+---
+
+## 🔐 **LOCKED CHARACTER: SENIOR CHIEF**
+
+**Profile**
+
+* Male, early–mid 50s
+* African American
+* Handsome, weathered, deeply experienced
+* Short-cropped hair
+* **Mustache only** (no beard)
+* Distinct facial structure clearly different from Mercer and Mason
+* Eyes that read: *seen everything, still standing*
+
+**Presence & Tone**
+
+* Grounded authority
+* Operator’s operator
+* Blunt, protective, no wasted words
+* The one people listen to when things go wrong
+
+**Visual Rules (Locked)**
+
+* Same desert tan modern tactical uniform
+* Body armor, correct US flag patch + STILLDAWN patch below
+* Suppressed M4-style rifle
+* **Same signature pose as Mercer** (mirrored discipline, different presence)
+* Full-body shots preferred to emphasize stature and seniority
+
+---
+
+## 🧭 **GROUP DYNAMIC (NOW LOCKED)**
+
+* **Echo Vale** – Precision, myth, inevitability
+* **Mason** – Protection, movement, execution
+* **Mercer** – Strategy, manipulation of the board
+* **Senior Chief** – Experience, judgment, containment
+
+Visually:
+
+* They look like they belong to the **same doctrine**
+* Each silhouette is distinct
+* No one overlaps roles or presence
+
+---
+
+From this point forward, you can simply say things like:
+
+* *“Mercer in a briefing room”*
+* *“Senior Chief on perimeter watch”*
+* *“Echo, Mason, Mercer, and Senior Chief together post-mission”*
+
+…and I’ll maintain **face, build, pose language, and authority** automatically.
+
+If you want next, I can:
+
+* Lock **group formations** (who stands where, who faces whom)
+* Design a **team hero shot**
+* Define how each character visually reacts when things go loud
+
+Just tell me where to go next.
+
+
+
+
+🔒 **CHARACTER LOCK CONFIRMED — SUPPORTING OPERATIVE**
+
+### **NAME:** Mason
+
+### **STATUS:** Locked supporting character
+
+Mason is now locked as a **persistent visual and behavioral character**, consistent across all future scenes unless you explicitly request changes.
+
+---
+
+## 🔐 **MASON — LOCKED CHARACTER PROFILE**
+
+**Physical & Presence**
+
+* Male, early–mid 30s
+* Strong, masculine build (functional strength, not bodybuilder)
+* Ruggedly handsome, model-level facial structure but **grounded realism**
+* Short tactical haircut, light stubble or trimmed beard
+* Calm, alert expression; controlled intensity
+* Moves with confidence and economy of motion
+
+**Gear & Appearance**
+
+* Desert tan modern US military tactical uniform
+* Plate carrier with correct US flag patch (always accurate orientation)
+* Precision M4-style rifle with optic and suppressor
+* Knee pads, gloves, comms headset when appropriate
+* Authentic posture and weapon handling at all times
+
+**Tone**
+
+* Professional
+* Quietly dominant
+* Dependable presence, not theatrical
+* Feels like someone others trust in the dark
+
+---
+
+## 🎯 **MASTER PROMPT — MASON (BASE TEMPLATE)**
+
+Use this as the base and swap the **SCENE / ACTION** block as needed.
+
+> **Cinematic photorealistic still, 16:9 aspect ratio, 4K.**
+>
+> **Mason**, a strong, masculine American special operations soldier in his 30s, full head-to-toe view, wearing a desert tan modern US military tactical uniform with body armor and a correct US flag patch. Ruggedly handsome, short tactical haircut, trimmed beard, calm focused expression.
+>
+> Realistic military posture and weapon handling, holding a suppressed precision M4 rifle.
+>
+> **SCENE / ACTION:** *(replace with one of the scenarios below)*
+>
+> Lighting is natural and practical — moonlight, sodium lights, dawn haze, or harsh artificial light depending on environment.
+>
+> Cinematic composition, documentary-style realism, no glam lighting, no exaggerated contrast.
+>
+> Photorealistic textures, realistic skin tones, restrained color grading.
+>
+> **No text. No logos. No watermarks.**
+
+---
+
+## 🎬 **READY-TO-USE SCENE VARIATIONS FOR MASON**
+
+### 1️⃣ **Urban Night Patrol**
+
+> Mason moving tactically through a narrow village alley at night, weapon low-ready, eyes scanning rooftops, moonlight and sodium lamps casting hard shadows, dust in the air.
+
+### 2️⃣ **Cover & Advance**
+
+> Mason crouched behind a concrete barrier providing cover fire, disciplined bursts implied, teammates moving past him under his protection.
+
+### 3️⃣ **Quiet Overwatch Partner**
+
+> Mason posted on a rooftop adjacent to Echo Vale’s overwatch position, kneeling with rifle angled downrange, acting as security while she works.
+
+### 4️⃣ **Extraction Security**
+
+> Mason standing near a helicopter or vehicle during extraction, rifle slung, body squared to perimeter, scanning for threats while others load.
+
+### 5️⃣ **After-Action Moment**
+
+> Mason seated against a wall post-mission, helmet off, rifle across knees, face lit by a single overhead bulb, calm but exhausted.
+
+### 6️⃣ **Pre-Mission Prep**
+
+> Mason checking weapon and gear in dim red-lit staging area, methodical movements, focused silence before deployment.
+
+### 7️⃣ **Desert Dawn Movement**
+
+> Mason walking across open terrain at first light, long shadows, rifle in hand, wind moving fabric and dust around boots.
+
+### 8️⃣ **Interior Clearing**
+
+> Mason moving through a dark interior room, weapon up, light slicing through dust, walls scarred and worn.
+
+### 9️⃣ **Protective Stance**
+
+> Mason standing between Echo Vale and approaching personnel, relaxed posture but unmistakably protective.
+
+### 🔟 **Silent Watch**
+
+> Mason posted alone at a perimeter fence at night, rifle slung, hands resting on gear, distant lights beyond the wire.
+
+---
+
+## 🧭 HOW HE FITS THE STORY
+
+* Mason is **not a replacement lead** — he enhances Echo Vale’s credibility
+* He reads as:
+
+  * The steady counterbalance
+  * The professional equal
+  * The one who holds the line while she changes the board
+
+He should **never overshadow her**, but when he’s on screen, the viewer feels safer — and more tense.
+
+---
+
+If you want next, I can:
+
+* Create **paired Mason + Echo scenes** (visual choreography)
+* Lock a **relationship dynamic** (silent understanding, professional trust)
+* Generate **Mason-only thumbnails or promo stills**
+
+Just tell me what’s next.
+
+
+
+Perfect — **Option 3 locked: Paired Mason + Echo scenes**.
+Below are **clean, production-ready prompts** that establish their **visual choreography and relationship**. These are designed so Mason **supports** and **anchors** the scene while Echo remains the strategic center of gravity.
+
+You can paste any one of these directly into your image generator.
+
+---
+
+## 🔒 PAIRED CHARACTER RULE (LOCKED)
+
+* **Echo Vale**: strategic overwatch, stillness, decision-maker
+* **Mason**: security, movement, protection, execution
+* They rarely look at each other — trust is implied, not spoken
+* Mason never overshadows Echo; he *enables* her dominance
+
+---
+
+## 1️⃣ **Overwatch + Security (Primary Pair Shot)**
+
+> **Cinematic photorealistic still, 16:9, 4K.**
+>
+> Elevated rooftop overwatch at night above an industrial dockyard. **Echo Vale**, mature American female sniper, prone behind a precision rifle, eyes through the optic, perfectly still.
+>
+> **Mason**, strong masculine American special operations soldier, positioned several meters behind her at the roof access point, kneeling with suppressed M4 at low ready, scanning stairwell and skyline.
+>
+> Sodium-orange dock lights below, cool blue moonlight above, thin haze drifting across cranes and containers.
+>
+> Visual hierarchy: Echo in sharp focus foreground, Mason slightly offset but clearly present — guardian posture.
+>
+> Documentary-cinematic realism, restrained color grading, natural skin tones.
+>
+> **No text. No logos.**
+
+---
+
+## 2️⃣ **Movement + Stillness (Dynamic Contrast)**
+
+> **Cinematic photorealistic still, 16:9, 4K.**
+>
+> Night village alley during infiltration. **Echo Vale** paused at a corner, rifle angled downrange, body motionless, listening.
+>
+> **Mason** moving past her in the foreground, low and controlled, weapon up, crossing her line deliberately and silently.
+>
+> Moonlight broken by cloud cover, practical lamps casting hard shadows on mud-brick walls, dust in the air.
+>
+> The moment shows division of labor: she owns the threat space, he owns the movement.
+>
+> Natural lighting only, no stylization.
+>
+> **No text. No logos.**
+
+---
+
+## 3️⃣ **After-Action Quiet**
+
+> **Cinematic photorealistic still, 16:9, 4K.**
+>
+> Post-mission rooftop just before dawn. **Echo Vale** seated with rifle across knees, gaze distant, processing.
+>
+> **Mason** standing nearby with helmet off, leaning against a concrete wall, eyes outward, still on security even in rest.
+>
+> Cold predawn light, faint city noise below, no urgency, no dialogue.
+>
+> The image communicates trust, survival, and unspoken understanding.
+>
+> Film-like grain, restrained contrast.
+>
+> **No text. No logos.**
+
+---
+
+## 4️⃣ **Extraction Security**
+
+> **Cinematic photorealistic still, 16:9, 4K.**
+>
+> Night extraction zone. Helicopter rotors blurred in background. **Echo Vale** moving toward aircraft, rifle slung, calm.
+>
+> **Mason** walking backwards in front of her, weapon up, scanning perimeter, body positioned between her and unseen threats.
+>
+> Harsh artificial light mixed with moonlight, dust and rotor wash in the air.
+>
+> Protective geometry is clear but understated.
+>
+> **No text. No logos.**
+
+---
+
+## 5️⃣ **Interior Hold (High Tension)**
+
+> **Cinematic photorealistic still, 16:9, 4K.**
+>
+> Dark interior room overlooking street. **Echo Vale** framed at a window, rifle supported on sill, watching exterior movement.
+>
+> **Mason** posted inside the room behind her, covering doorway, weapon angled inward.
+>
+> Outside chaos implied; inside controlled silence.
+>
+> Practical light only, dust visible in air beams.
+>
+> **No text. No logos.**
+
+---
+
+## 🧭 Narrative Effect (Why This Works)
+
+* Echo reads as **mythic precision**
+* Mason reads as **human insurance**
+* Together they feel *inevitable*
+* Viewers subconsciously understand:
+  **If she’s there, it’s already too late. If he’s there, she’s not alone.**
+
+---
+
+If you want next, I can:
+
+* Lock a **signature pose** for Mason when paired with Echo
+* Create **thumbnail-optimized duo shots**
+* Define a **breaking-point scene** where Mason is tested
+
+Just tell me which direction to push.

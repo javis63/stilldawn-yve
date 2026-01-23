@@ -23,6 +23,7 @@ import {
   FileText,
   Images,
   Archive,
+  Sparkles,
 } from "lucide-react";
 import { Project, Scene } from "@/types/project";
 import { supabase } from "@/integrations/supabase/client";
@@ -65,6 +66,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   const [renderProgress, setRenderProgress] = useState(0);
   const [thumbnailSceneId, setThumbnailSceneId] = useState<string | null>(null);
   const [wordTimestamps, setWordTimestamps] = useState<WordTimestamp[]>([]);
+  const [imageGenProgress, setImageGenProgress] = useState({ current: 0, total: 0 });
   
   // Audio player state
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -454,6 +456,65 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     }
   };
 
+  // Auto-generate images for all scenes using AI
+  const handleAutoGenerateImages = async () => {
+    if (scenes.length === 0) {
+      toast.error("No scenes available. Generate scenes first.");
+      return;
+    }
+
+    const scenesWithoutImages = scenes.filter(s => !s.image_url);
+    if (scenesWithoutImages.length === 0) {
+      toast.info("All scenes already have images. Clear existing images to regenerate.");
+      return;
+    }
+
+    setProcessing("images");
+    setImageGenProgress({ current: 0, total: scenesWithoutImages.length });
+    toast.info(`Generating ${scenesWithoutImages.length} images with AI... This may take a few minutes.`);
+
+    try {
+      for (let i = 0; i < scenesWithoutImages.length; i++) {
+        const scene = scenesWithoutImages[i];
+        setImageGenProgress({ current: i + 1, total: scenesWithoutImages.length });
+        
+        toast.info(`Generating image ${i + 1} of ${scenesWithoutImages.length}...`);
+
+        const { data, error } = await supabase.functions.invoke('generate-scene-images', {
+          body: {
+            projectId: currentProject.id,
+            sceneId: scene.id,
+            narration: scene.narration || scene.visual_prompt || `Scene ${scene.scene_number}`,
+          },
+        });
+
+        if (error) {
+          console.error(`Error generating image for scene ${scene.scene_number}:`, error);
+          toast.error(`Failed to generate image for scene ${scene.scene_number}`);
+          continue;
+        }
+
+        if (!data.success) {
+          toast.error(data.error || `Failed to generate image for scene ${scene.scene_number}`);
+          continue;
+        }
+
+        toast.success(`Generated image for scene ${scene.scene_number}`);
+      }
+
+      // Refresh scenes to show new images
+      await fetchScenes();
+      toast.success(`Image generation complete! Generated ${scenesWithoutImages.length} images.`);
+      onRefresh();
+    } catch (error: any) {
+      console.error("Image generation error:", error);
+      toast.error(error.message || "Failed to generate images");
+    } finally {
+      setProcessing(null);
+      setImageGenProgress({ current: 0, total: 0 });
+    }
+  };
+
   const handleRenderProject = async () => {
     const isMusicVideoProject = (currentProject as any).project_type === 'music';
     
@@ -586,7 +647,27 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
               ) : (
                 <Layers className="h-4 w-4 mr-2" />
               )}
-              Generate Scenes
+              Generate 4 Scenes
+            </Button>
+            <Button
+              onClick={handleAutoGenerateImages}
+              disabled={!!processing || scenes.length === 0}
+              variant="outline"
+              className="gap-2"
+            >
+              {processing === "images" ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  {imageGenProgress.total > 0 && (
+                    <span>{imageGenProgress.current}/{imageGenProgress.total}</span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4" />
+                  Auto-Generate Images
+                </>
+              )}
             </Button>
           </>
         )}
