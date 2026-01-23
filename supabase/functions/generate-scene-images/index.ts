@@ -145,10 +145,10 @@ No text, no logos, no watermarks.`;
       }
     }
 
-    // Update the scene with the generated image
+    // Fetch scene to get existing images and timing info
     const { data: scene, error: fetchError } = await supabase
       .from("scenes")
-      .select("image_urls")
+      .select("image_urls, image_url, start_time, end_time")
       .eq("id", sceneId)
       .single();
 
@@ -156,15 +156,30 @@ No text, no logos, no watermarks.`;
       throw new Error(`Failed to fetch scene: ${fetchError.message}`);
     }
 
-    // Add to existing images or create new array
+    // Add to existing images (append mode)
     const existingUrls = scene?.image_urls || [];
+    // If there's a primary image_url but not in image_urls, include it
+    if (scene?.image_url && !existingUrls.includes(scene.image_url)) {
+      existingUrls.unshift(scene.image_url);
+    }
     const updatedUrls = [...existingUrls, imageUrl];
+
+    // Calculate equal durations for all images in the scene
+    const sceneDuration = Number(scene?.end_time || 0) - Number(scene?.start_time || 0);
+    const durationPerImage = sceneDuration > 0 && updatedUrls.length > 0 
+      ? sceneDuration / updatedUrls.length 
+      : 0;
+    const equalDurations = updatedUrls.map(() => durationPerImage);
+
+    // Only set image_url (primary) if this is the first image
+    const primaryImage = existingUrls.length === 0 ? imageUrl : (scene?.image_url || imageUrl);
 
     const { error: updateError } = await supabase
       .from("scenes")
       .update({
-        image_url: imageUrl, // Set as primary
+        image_url: primaryImage,
         image_urls: updatedUrls,
+        image_durations: equalDurations,
       })
       .eq("id", sceneId);
 
