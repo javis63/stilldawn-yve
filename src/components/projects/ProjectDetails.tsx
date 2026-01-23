@@ -787,7 +787,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">
-              Extract media ZIP, then in DaVinci: File → Import → Timeline → select .fcpxml → relink media to extracted folder
+              Create a folder, move the .fcpxml into it, then extract the Media ZIP into the SAME folder. In DaVinci: File → Import → Timeline → select .fcpxml.
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Legacy Options</DropdownMenuLabel>

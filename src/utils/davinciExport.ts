@@ -331,10 +331,11 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
     const endFrame = Math.round(scene.end_time * fps);
     const durationFrames = endFrame - startFrame;
     
-    // Asset definition - using relative path for relinking
+    // Asset definition - relative to the folder containing the .fcpxml.
+    // This allows a simple workflow: put .fcpxml + extracted media in the same directory.
     imageAssets += `
       <asset id="${assetId}" name="${filename}" start="0s" duration="${durationFrames}/24s" hasVideo="1" format="r1">
-        <media-rep kind="original-media" src="file://./${safeName}_Media/${filename}"/>
+        <media-rep kind="original-media" src="file://./${filename}"/>
       </asset>`;
     
     // Clip on timeline
@@ -344,6 +345,21 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
   
   // Audio asset
   const audioDurationFrames = Math.round(audioDuration * fps);
+
+  const hasAudio = Boolean(audioFilename) && audioDurationFrames > 0;
+
+  const audioResource = hasAudio
+    ? `
+    <asset id="asset_audio" name="${audioFilename}" start="0s" duration="${audioDurationFrames}/24s" hasAudio="1" format="r2">
+      <media-rep kind="original-media" src="file://./${audioFilename}"/>
+    </asset>`
+    : "";
+
+  const audioClip = hasAudio
+    ? `
+          <!-- Audio Track -->
+          <asset-clip name="${audioFilename}" ref="asset_audio" lane="-1" offset="0s" duration="${audioDurationFrames}/24s" start="0s" format="r2"/>`
+    : "";
   
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fcpxml>
@@ -352,9 +368,7 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
     <format id="r1" name="FFVideoFormat1080p24" frameDuration="1/24s" width="${width}" height="${height}"/>
     <format id="r2" name="FFAudioFormat48000" sampleRate="48000"/>
     ${imageAssets}
-    <asset id="asset_audio" name="${audioFilename}" start="0s" duration="${audioDurationFrames}/24s" hasAudio="1" format="r2">
-      <media-rep kind="original-media" src="file://./${safeName}_Media/${audioFilename}"/>
-    </asset>
+    ${audioResource}
   </resources>
   <library location="file://./">
     <event name="${safeName}">
@@ -364,8 +378,7 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
             <!-- Video Track - Images -->
             ${imageClips}
           </spine>
-          <!-- Audio Track -->
-          <asset-clip name="${audioFilename}" ref="asset_audio" lane="-1" offset="0s" duration="${audioDurationFrames}/24s" start="0s" format="r2"/>
+          ${audioClip}
         </sequence>
       </project>
     </event>
