@@ -8,7 +8,14 @@ const corsHeaders = {
 };
 
 // Character lock for consistent character appearance
-const CHARACTER_LOCK = `CHARACTER LOCK — PRIMARY PROTAGONIST (ECHO VALE)
+const CHARACTER_LOCK = `🔒 IMAGE GENERATION RULES — ABSOLUTE
+• ONLY depict ACTION from the narration — show characters DOING something tactical/military
+• Echo Vale MUST ALWAYS be holding or carrying her precision sniper rifle (long-barrel sniper system, NOT M4)
+• ALL characters MUST be in tactical uniform or tactical apparel at ALL times — no civilian clothes ever
+• Scene surroundings MUST match the EXACT location described in the script/narration
+• If narration says "desert," show desert. If "village," show village. If "rooftop," show rooftop.
+
+CHARACTER LOCK — PRIMARY PROTAGONIST (ECHO VALE)
 The same woman in every scene:
 • Adult American female, late 20s to early 30s (never teenage)
 • Strikingly beautiful, model-level facial structure
@@ -16,17 +23,24 @@ The same woman in every scene:
 • High cheekbones, sharp jawline, symmetrical face
 • Almond-shaped eyes, intense but controlled gaze
 • Minimal makeup, natural military-appropriate appearance
-• Brown hair pulled into a tight pontal or low tactical bun
+• Brown hair pulled into a tight ponytail or low tactical bun
 • Athletic, feminine, well-developed physique (fit, not exaggerated)
 • Mature presence, calm authority, experienced demeanor
 • NO changes to face shape, ethnicity, age range, or hair color
+• ALWAYS holding or carrying her signature precision sniper rifle
 
 SUPPORTING CHARACTERS:
-• Mason: Male, early-mid 30s, ruggedly handsome, short tactical haircut, light stubble, strong masculine build
+• Mason: Male, early-mid 30s, ruggedly handsome, short tactical haircut, light stubble, strong masculine build, suppressed M4 rifle
 • Mercer: Male, early-mid 40s, Caucasian, handsome, battle-hardened, senior-operator presence, salt-and-pepper short hair with neat gray beard
 • Senior Chief: Male, early-mid 50s, African American, short-cropped hair, mustache only (no beard)
 
-All characters wear desert tan modern US military tactical uniforms with STILLDAWN patches and body armor.
+UNIFORM LOCK — ALL CHARACTERS:
+• Desert tan modern US military tactical uniforms
+• STILLDAWN patches and body armor always visible
+• Helmets when in combat/field operations
+• Tactical gear appropriate to the scene
+• NO civilian clothing, NO casual wear — TACTICAL ONLY
+
 Cinematic, photorealistic, 16:9, 4K, no text, no logos.`;
 
 serve(async (req) => {
