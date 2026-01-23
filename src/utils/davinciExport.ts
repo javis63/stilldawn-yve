@@ -331,11 +331,11 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
     const endFrame = Math.round(scene.end_time * fps);
     const durationFrames = endFrame - startFrame;
     
-    // Asset definition - relative to the folder containing the .fcpxml.
-    // This allows a simple workflow: put .fcpxml + extracted media in the same directory.
+    // Asset definition - use just the filename so DaVinci will prompt to locate it.
+    // When user points to the folder containing media, it will auto-link all files.
     imageAssets += `
       <asset id="${assetId}" name="${filename}" start="0s" duration="${durationFrames}/24s" hasVideo="1" format="r1">
-        <media-rep kind="original-media" src="file://./${filename}"/>
+        <media-rep kind="original-media" src="${filename}"/>
       </asset>`;
     
     // Clip on timeline
@@ -351,7 +351,7 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
   const audioResource = hasAudio
     ? `
     <asset id="asset_audio" name="${audioFilename}" start="0s" duration="${audioDurationFrames}/24s" hasAudio="1" format="r2">
-      <media-rep kind="original-media" src="file://./${audioFilename}"/>
+      <media-rep kind="original-media" src="${audioFilename}"/>
     </asset>`
     : "";
 
@@ -509,17 +509,16 @@ export async function downloadDaVinciBundle(
   
   onProgress?.('Creating project files', 2, 5);
   
-  // Add images folder
+  // Add images at root level (same folder as FCPXML) for easy auto-linking
   const images = getSceneImages(scenes);
-  const imagesFolder = zip.folder('images');
   
   for (let i = 0; i < images.length; i++) {
     const { filename, url } = images[i];
     onProgress?.('Downloading images', i + 1, images.length);
     
     const blob = await downloadImageAsBlob(url);
-    if (blob && imagesFolder) {
-      imagesFolder.file(filename, blob);
+    if (blob) {
+      zip.file(filename, blob);
     }
   }
   
@@ -549,20 +548,22 @@ export async function downloadDaVinciBundle(
 - ${safeName}_scenes.csv - Scene reference list
 - ${safeName}.srt - SRT subtitles
 - ${safeName}.vtt - VTT subtitles
-- images/ - All scene images (numbered sequentially)
+- 001_scene.jpg, 002_scene.jpg, etc. - Scene images
 ${audioUrl ? `- ${audioFilename} - Audio track` : ''}
 
-## QUICK IMPORT (Recommended):
+## QUICK IMPORT:
 
 ### Step 1: Extract the ZIP
 Extract this ZIP file to a folder on your computer.
+All media files are at the root level alongside the .fcpxml file.
 
 ### Step 2: Import to DaVinci Resolve
 1. Open DaVinci Resolve
-2. File → Import → Timeline (or Import AAF, EDL, XML)
+2. File → Import → Timeline
 3. Select the .fcpxml file
-4. When prompted about media, browse to the extracted folder
-5. DaVinci will auto-link the images from the "images" folder and the audio file
+4. Click "Yes" when prompted to search for clips
+5. Navigate to the extracted folder and select it
+6. DaVinci will auto-link all images and audio
 
 ### Step 3: Verify
 - Images should appear on Video Track 1, timed to narration
@@ -577,14 +578,13 @@ Extract this ZIP file to a folder on your computer.
 ## Troubleshooting:
 
 ### Media Offline/Missing:
-1. Right-click the timeline → Relink Media
-2. Browse to the extracted folder
-3. Select "images" folder for images, root for audio
+1. Right-click offline clips in Media Pool
+2. Select "Relink Selected Clips..."
+3. Navigate to the extracted folder
 
 ### Timecode Reference:
 - Frame rate: 24fps
 - Resolution: 1920x1080
-- All timings are in frames (24fps)
 `;
   zip.file('README.txt', readme);
   
