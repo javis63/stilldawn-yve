@@ -395,10 +395,11 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
     const endFrame = Math.round(scene.end_time * fps);
     const durationFrames = endFrame - startFrame;
     
-    // Asset definition - use file:// URI scheme for better DaVinci compatibility.
+    // Asset definition - use a valid file: URI reference.
+    // NOTE: `file://<filename>` is interpreted as a host (invalid for our use) and breaks relink in DaVinci.
     imageAssets += `
       <asset id="${assetId}" name="${filename}" start="0s" duration="${durationFrames}/24s" hasVideo="1" format="r1">
-        <media-rep kind="original-media" src="file://${filename}"/>
+        <media-rep kind="original-media" src="file:${filename}"/>
       </asset>`;
     
     // Clip on timeline
@@ -414,7 +415,7 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
   const audioResource = hasAudio
     ? `
     <asset id="asset_audio" name="${audioFilename}" start="0s" duration="${audioDurationFrames}/24s" hasAudio="1" format="r2">
-      <media-rep kind="original-media" src="file://${audioFilename}"/>
+      <media-rep kind="original-media" src="file:${audioFilename}"/>
     </asset>`
     : "";
 
@@ -433,7 +434,7 @@ export function generateDaVinciXML(projectTitle: string, scenes: Scene[], audioD
     ${imageAssets}
     ${audioResource}
   </resources>
-  <library location="file://./">
+  <library location="file:./">
     <event name="${safeName}">
       <project name="${safeName}">
         <sequence duration="${audioDurationFrames}/24s" format="r1" tcStart="0s" tcFormat="NDF">
