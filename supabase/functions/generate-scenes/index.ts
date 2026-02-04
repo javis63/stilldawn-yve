@@ -50,9 +50,9 @@ serve(async (req) => {
       throw new Error("Missing projectId or transcript");
     }
 
-    const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
-    if (!lovableApiKey) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const anthropicApiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    if (!anthropicApiKey) {
+      throw new Error("ANTHROPIC_API_KEY is not configured");
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -127,18 +127,20 @@ ${transcript}
 
 Return ONLY the JSON, no other text.`;
 
-    console.log("Calling Lovable AI for scene boundaries + prompts...");
+    console.log("Calling Anthropic Claude for scene boundaries + prompts...");
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${lovableApiKey}`,
+        "x-api-key": anthropicApiKey,
+        "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "openai/gpt-5-mini",
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 4096,
+        system: systemPrompt,
         messages: [
-          { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
       }),
@@ -146,12 +148,12 @@ Return ONLY the JSON, no other text.`;
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("AI API error:", errorText);
-      throw new Error(`AI API error: ${response.status}`);
+      console.error("Anthropic API error:", errorText);
+      throw new Error(`Anthropic API error: ${response.status}`);
     }
 
     const aiResult = await response.json();
-    const content = aiResult.choices?.[0]?.message?.content;
+    const content = aiResult.content?.[0]?.text;
 
     if (!content) {
       throw new Error("No content in AI response");

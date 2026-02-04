@@ -18,9 +18,9 @@ serve(async (req) => {
       throw new Error('Missing sceneId or narration');
     }
 
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
-    if (!lovableApiKey) {
-      throw new Error('LOVABLE_API_KEY is not configured');
+    const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY');
+    if (!anthropicApiKey) {
+      throw new Error('ANTHROPIC_API_KEY is not configured');
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -49,18 +49,20 @@ Return ONLY the visual prompt text, no additional formatting or explanation.`;
 
 ${narration.substring(0, 2000)}`;
 
-    console.log('Calling Lovable AI for visual prompt...');
+    console.log('Calling Anthropic Claude for visual prompt...');
 
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${lovableApiKey}`,
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-3-flash-preview',
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1024,
+        system: systemPrompt,
         messages: [
-          { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
         ],
       }),
@@ -68,12 +70,12 @@ ${narration.substring(0, 2000)}`;
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('AI API error:', errorText);
-      throw new Error(`AI API error: ${response.status}`);
+      console.error('Anthropic API error:', errorText);
+      throw new Error(`Anthropic API error: ${response.status}`);
     }
 
     const aiResult = await response.json();
-    const visualPrompt = aiResult.choices?.[0]?.message?.content?.trim();
+    const visualPrompt = aiResult.content?.[0]?.text?.trim();
     
     if (!visualPrompt) {
       throw new Error('No content in AI response');
