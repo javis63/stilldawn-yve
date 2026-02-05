@@ -223,7 +223,16 @@ def verify_lovable_api_key() -> bool:
 
 @app.route('/')
 def index():
+    # Serve React frontend if dist exists, otherwise fallback to old dashboard
+    dist_index = BASE_DIR / 'dist' / 'index.html'
+    if dist_index.exists():
+        return send_file(dist_index)
     return send_file('yve_dashboard.html')
+
+@app.route('/assets/<path:filename>')
+def serve_assets(filename):
+    """Serve React frontend static assets."""
+    return send_from_directory(BASE_DIR / 'dist' / 'assets', filename)
 
 @app.route('/api/transcribe-and-analyze', methods=['POST'])
 def transcribe_and_analyze():

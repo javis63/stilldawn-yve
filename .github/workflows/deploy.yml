@@ -3,15 +3,27 @@ name: Deploy to VPS
 on:
   push:
     branches: [main]
-    paths:
-      - 'backend_server.py'
-      - 'supabase/functions/**'
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy backend to VPS
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Deploy to VPS
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: 31.97.147.132
@@ -24,3 +36,13 @@ jobs:
             sleep 2
             nohup python3 backend_server.py > backend.log 2>&1 &
             echo "✅ Backend restarted"
+
+      - name: Copy frontend build to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: 31.97.147.132
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "dist/*"
+          target: "/root/yve-independent/dist"
+          strip_components: 1
