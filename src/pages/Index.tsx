@@ -6,6 +6,7 @@ import { CreateProject } from "@/components/create/CreateProject";
 import { MusicVideoCreate } from "@/components/create/MusicVideoCreate";
 import { ProjectsTab } from "@/components/projects/ProjectsTab";
 import { FinishedVideos } from "@/components/finished/FinishedVideos";
+import { GenerateContent } from "@/components/generate/GenerateContent";
 import { Mic, Music } from "lucide-react";
 
 const Index = () => {
@@ -46,6 +47,9 @@ const Index = () => {
       </TabsContent>
       <TabsContent value="finished" className="mt-6">
         <FinishedVideos />
+      </TabsContent>
+      <TabsContent value="generate" className="mt-6">
+        <GenerateContent onProjectCreated={handleProjectCreated} />
       </TabsContent>
     </MainLayout>
   );

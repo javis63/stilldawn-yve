@@ -28,6 +28,7 @@ export type Database = {
           title: string
           transcript: string | null
           updated_at: string
+          use_character_lock: boolean
           user_id: string | null
           word_timestamps: Json | null
         }
@@ -44,6 +45,7 @@ export type Database = {
           title: string
           transcript?: string | null
           updated_at?: string
+          use_character_lock?: boolean
           user_id?: string | null
           word_timestamps?: Json | null
         }
@@ -60,6 +62,7 @@ export type Database = {
           title?: string
           transcript?: string | null
           updated_at?: string
+          use_character_lock?: boolean
           user_id?: string | null
           word_timestamps?: Json | null
         }

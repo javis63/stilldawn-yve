@@ -14,6 +14,7 @@ export interface Project {
   status: ProjectStatus;
   progress: number | null;
   project_type: ProjectType;
+  use_character_lock: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -28,6 +29,8 @@ export interface Scene {
   narration: string;
   visual_prompt: string | null;
   image_url: string | null;
+  image_urls: string[] | null;
+  image_durations: number[] | null;
   video_url: string | null;
   transition: TransitionType;
   created_at: string;

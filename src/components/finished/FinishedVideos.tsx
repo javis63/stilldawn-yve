@@ -96,19 +96,46 @@ export function FinishedVideos() {
 
   const handleDownload = async (url: string, filename: string) => {
     try {
+      toast.info("Downloading video...");
       const res = await fetch(url);
       if (!res.ok) throw new Error(`Download failed (${res.status})`);
       const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
 
+      // Try File System Access API first (allows user to pick folder)
+      if ('showSaveFilePicker' in window) {
+        try {
+          const handle = await (window as any).showSaveFilePicker({
+            suggestedName: filename,
+            types: [{
+              description: 'MP4 Video',
+              accept: { 'video/mp4': ['.mp4'] },
+            }],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          toast.success(`Saved: ${filename}`);
+          return;
+        } catch (fsErr: any) {
+          // User cancelled or API failed, fall back to regular download
+          if (fsErr.name === 'AbortError') {
+            toast.info("Download cancelled");
+            return;
+          }
+          console.log("File System API not available, using fallback");
+        }
+      }
+
+      // Fallback: standard download
+      const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = blobUrl;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
-
       URL.revokeObjectURL(blobUrl);
+      toast.success(`Downloaded: ${filename}`);
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Couldn't download file");
@@ -165,7 +192,17 @@ export function FinishedVideos() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
+  const normalizeStatus = (raw: string): string => {
+    const s = (raw || "").toLowerCase().trim();
+    if (s.includes("completed") || s.includes("complete")) return "completed";
+    if (s.includes("failed") || s.includes("error")) return "failed";
+    if (s.includes("rendering")) return "rendering";
+    if (s.includes("queued")) return "queued";
+    return s || "queued";
+  };
+
+  const getStatusBadge = (rawStatus: string) => {
+    const status = normalizeStatus(rawStatus);
     const variants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
       queued: "secondary",
       rendering: "outline",
@@ -178,10 +215,16 @@ export function FinishedVideos() {
       completed: "bg-green-600",
       failed: "",
     };
+    const labels: Record<string, string> = {
+      queued: "Queued",
+      rendering: "Rendering",
+      completed: "Complete",
+      failed: "Failed",
+    };
     return (
-      <Badge variant={variants[status]} className={`capitalize ${colors[status]}`}>
+      <Badge variant={variants[status] || "secondary"} className={colors[status] || ""}>
         {status === "rendering" && <RefreshCw className="h-3 w-3 mr-1 animate-spin" />}
-        {status}
+        {labels[status] || status}
       </Badge>
     );
   };
@@ -296,12 +339,14 @@ export function FinishedVideos() {
                         variant="outline"
                         size="sm"
                         disabled={!render.video_url}
-                        onClick={() =>
-                          handleDownload(
-                            render.video_url!,
-                            `${(render.project as any)?.title || "video"}-${render.id}.mp4`
-                          )
-                        }
+                        onClick={() => {
+                          const title = ((render.project as any)?.title || "video")
+                            .replace(/[^a-zA-Z0-9\s-]/g, '')
+                            .replace(/\s+/g, '_')
+                            .substring(0, 50);
+                          const date = new Date(render.created_at).toISOString().split('T')[0];
+                          handleDownload(render.video_url!, `${title}_${date}.mp4`);
+                        }}
                       >
                         <Download className="h-4 w-4 mr-1" />
                         Download

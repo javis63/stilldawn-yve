@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import {
   Wand2,
   Layers,
@@ -71,6 +73,7 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
   const [thumbnailSceneId, setThumbnailSceneId] = useState<string | null>(null);
   const [wordTimestamps, setWordTimestamps] = useState<WordTimestamp[]>([]);
   const [imageGenProgress, setImageGenProgress] = useState({ current: 0, total: 0 });
+  const [useCharacterLock, setUseCharacterLock] = useState(true);
   
   // Audio player state
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -90,12 +93,16 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     const fetchProjectDetails = async () => {
       const { data } = await supabase
         .from("projects")
-        .select("thumbnail_scene_id, word_timestamps")
+        .select("thumbnail_scene_id, word_timestamps, use_character_lock")
         .eq("id", project.id)
         .maybeSingle();
-      
+
       if (data?.thumbnail_scene_id) {
         setThumbnailSceneId(data.thumbnail_scene_id);
+      }
+
+      if (data?.use_character_lock !== undefined && data?.use_character_lock !== null) {
+        setUseCharacterLock(data.use_character_lock);
       }
       
       // Parse word timestamps
@@ -227,6 +234,22 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
       toast.success(sceneId ? "Thumbnail scene selected" : "Thumbnail scene cleared");
     } catch (error: any) {
       toast.error(error.message || "Failed to set thumbnail scene");
+    }
+  };
+
+  const handleToggleCharacterLock = async (checked: boolean) => {
+    try {
+      const { error } = await supabase
+        .from("projects")
+        .update({ use_character_lock: checked })
+        .eq("id", project.id);
+
+      if (error) throw error;
+
+      setUseCharacterLock(checked);
+      toast.success(checked ? "Character lock enabled" : "Character lock disabled");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to update character lock setting");
     }
   };
 
@@ -515,8 +538,10 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
           body: {
             projectId: currentProject.id,
             sceneId: scene.id,
-            narration: scene.narration || scene.visual_prompt || `Scene ${scene.scene_number}`,
+            // Use visual_prompt (designed for image generation) over narration (spoken text)
+            narration: scene.visual_prompt || scene.narration || `Scene ${scene.scene_number}`,
             referenceImageBase64, // Send base64 reference image for character consistency
+            useCharacterLock,
           },
         });
 
@@ -632,7 +657,19 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
     }
   };
 
-  const getStatusBadge = (status: string) => {
+  const normalizeProjectStatus = (raw: string): string => {
+    const s = (raw || "").toLowerCase().trim();
+    if (s.includes("completed") || s.includes("complete")) return "completed";
+    if (s.includes("error") || s.includes("failed")) return "error";
+    if (s.includes("rendering")) return "rendering";
+    if (s.includes("processing")) return "processing";
+    if (s.includes("ready")) return "ready";
+    if (s.includes("draft")) return "draft";
+    return s || "draft";
+  };
+
+  const getStatusBadge = (rawStatus: string) => {
+    const status = normalizeProjectStatus(rawStatus);
     const variants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
       draft: "secondary",
       processing: "outline",
@@ -641,9 +678,17 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
       completed: "default",
       error: "destructive",
     };
+    const labels: Record<string, string> = {
+      draft: "Draft",
+      processing: "Processing",
+      ready: "Ready",
+      rendering: "Rendering",
+      completed: "Complete",
+      error: "Error",
+    };
     return (
-      <Badge variant={variants[status] || "secondary"} className="capitalize">
-        {status}
+      <Badge variant={variants[status] || "secondary"}>
+        {labels[status] || status}
       </Badge>
     );
   };
@@ -933,6 +978,23 @@ export function ProjectDetails({ project, onRefresh }: ProjectDetailsProps) {
                 {formatDistanceToNow(new Date(project.created_at), { addSuffix: true })}
               </span>
             </div>
+          </div>
+          <Separator className="my-3" />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-muted-foreground" />
+              <Label htmlFor="character-lock" className="text-sm text-muted-foreground cursor-pointer">
+                Character Lock
+              </Label>
+              <span className="text-xs text-muted-foreground">
+                — Enforces consistent character appearance in generated images
+              </span>
+            </div>
+            <Switch
+              id="character-lock"
+              checked={useCharacterLock}
+              onCheckedChange={handleToggleCharacterLock}
+            />
           </div>
         </CardContent>
       </Card>

@@ -1,7 +1,7 @@
 import { ReactNode } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Film, FolderOpen, Video, LogOut } from "lucide-react";
+import { Film, FolderOpen, Video, Sparkles, LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import logoSvg from "@/assets/logo.svg";
@@ -46,7 +46,7 @@ export function MainLayout({ activeTab, onTabChange, children }: MainLayoutProps
       {/* Main Content with Tabs */}
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={onTabChange} className="w-full">
-          <TabsList className="grid w-full max-w-md grid-cols-3 bg-muted">
+          <TabsList className="grid w-full max-w-lg grid-cols-4 bg-muted">
             <TabsTrigger value="create" className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Film className="h-4 w-4" />
               Create
@@ -58,6 +58,10 @@ export function MainLayout({ activeTab, onTabChange, children }: MainLayoutProps
             <TabsTrigger value="finished" className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Video className="h-4 w-4" />
               Finished
+            </TabsTrigger>
+            <TabsTrigger value="generate" className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+              <Sparkles className="h-4 w-4" />
+              Generate
             </TabsTrigger>
           </TabsList>
           {children}

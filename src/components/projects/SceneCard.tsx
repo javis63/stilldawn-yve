@@ -247,34 +247,49 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
 
   const handleRemoveImage = async (imageUrl: string, index: number) => {
     try {
-      const currentUrls = scene.image_urls || [];
-      const updatedUrls = currentUrls.filter(url => url !== imageUrl);
-      
+      // Get all images from both fields, remove the target, and rebuild
+      const allCurrentImages = getAllImages();
+      const updatedUrls = allCurrentImages.filter(url => url !== imageUrl);
+
       // Remove duration for this image
       const newDurations = [...imageDurations];
       newDurations.splice(index, 1);
-      
-      const updateData: any = { 
-        image_urls: updatedUrls,
-        image_durations: newDurations
-      };
-      
-      // If removing the primary image, set first remaining as primary
-      if (scene.image_url === imageUrl) {
-        updateData.image_url = updatedUrls[0] || null;
-      }
 
-      const { error } = await supabase
+      // Always update both fields for consistency
+      const updateData: any = {
+        image_urls: updatedUrls,
+        image_durations: newDurations,
+        // Set primary to first remaining image, or null if none left
+        image_url: updatedUrls[0] || null
+      };
+
+      console.log("Removing image:", imageUrl);
+      console.log("Scene ID:", scene.id);
+      console.log("Current images:", allCurrentImages);
+      console.log("Updated urls:", updatedUrls);
+      console.log("Update data:", updateData);
+
+      const { data, error } = await supabase
         .from("scenes")
         .update(updateData)
-        .eq("id", scene.id);
+        .eq("id", scene.id)
+        .select();
+
+      console.log("Supabase response - data:", data, "error:", error);
 
       if (error) throw error;
+
+      if (!data || data.length === 0) {
+        console.error("No rows updated - check RLS policies");
+        toast.error("Update failed - check database permissions");
+        return;
+      }
 
       setImageDurations(newDurations);
       toast.success("Image removed");
       onUpdate();
     } catch (error: any) {
+      console.error("Remove image error:", error);
       toast.error(error.message || "Failed to remove image");
     }
   };
@@ -298,23 +313,46 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
 
   const handleSetPrimaryImage = async (imageUrl: string) => {
     try {
-      const { error } = await supabase
+      // Reorder image_urls so the new primary is first
+      const allCurrentImages = getAllImages();
+      const reorderedUrls = [imageUrl, ...allCurrentImages.filter(url => url !== imageUrl)];
+
+      console.log("Setting primary:", imageUrl);
+      console.log("Scene ID:", scene.id);
+      console.log("Reordered urls:", reorderedUrls);
+
+      const { data, error } = await supabase
         .from("scenes")
-        .update({ image_url: imageUrl })
-        .eq("id", scene.id);
+        .update({
+          image_url: imageUrl,
+          image_urls: reorderedUrls
+        })
+        .eq("id", scene.id)
+        .select();
+
+      console.log("Supabase response - data:", data, "error:", error);
 
       if (error) throw error;
+
+      if (!data || data.length === 0) {
+        console.error("No rows updated - check RLS policies");
+        toast.error("Update failed - check database permissions");
+        return;
+      }
 
       toast.success("Primary image set");
       onUpdate();
     } catch (error: any) {
+      console.error("Set primary error:", error);
       toast.error(error.message || "Failed to set primary image");
     }
   };
 
   const handleVideoUpload = async (file: File) => {
+    setUploading(true);
     try {
-      const filePath = `${scene.project_id}/${scene.id}.${file.name.split(".").pop()}`;
+      const timestamp = Date.now();
+      const filePath = `${scene.project_id}/${scene.id}_${timestamp}.${file.name.split(".").pop()}`;
 
       const { error: uploadError } = await supabase.storage
         .from("videos")
@@ -324,17 +362,46 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
 
       const { data: urlData } = supabase.storage.from("videos").getPublicUrl(filePath);
 
+      // Update scene with video_url, set scene_type to 'video', and clear image fields
       const { error: updateError } = await supabase
         .from("scenes")
-        .update({ video_url: urlData.publicUrl })
+        .update({
+          video_url: urlData.publicUrl,
+          scene_type: 'video',
+          image_url: null,
+          image_urls: [],
+          image_durations: [],
+        })
         .eq("id", scene.id);
 
       if (updateError) throw updateError;
 
-      toast.success("Video uploaded");
+      setImageDurations([]);
+      toast.success("Video uploaded — this scene will use video instead of images");
       onUpdate();
     } catch (error: any) {
       toast.error(error.message || "Failed to upload video");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleRemoveVideo = async () => {
+    try {
+      const { error } = await supabase
+        .from("scenes")
+        .update({
+          video_url: null,
+          scene_type: 'image',
+        })
+        .eq("id", scene.id);
+
+      if (error) throw error;
+
+      toast.success("Video removed — you can now add images");
+      onUpdate();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to remove video");
     }
   };
 
@@ -661,33 +728,69 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
               )}
             </div>
 
-            {/* Multiple Images Section with Duration Controls */}
+            {/* Media Section (Images or Video) */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium text-foreground">
-                  Images ({allImages.length}) - Each with Ken Burns Effect
+                  {scene.scene_type === 'video' ? 'Video' : `Images (${allImages.length})`} {scene.scene_type !== 'video' && '- Each with Ken Burns Effect'}
                 </label>
                 <label className="cursor-pointer">
                   <Button variant="outline" size="sm" disabled={uploading} asChild>
                     <span>
                       <Plus className="h-4 w-4 mr-1" />
-                      {uploading ? "Uploading..." : "Add Image"}
+                      {uploading ? "Uploading..." : "Add Media"}
                     </span>
                   </Button>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/*,video/mp4,video/quicktime,video/webm"
                     className="hidden"
                     onChange={(e) => {
-                      if (e.target.files?.[0]) {
-                        handleAddImage(e.target.files[0]);
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        if (file.type.startsWith('video/')) {
+                          handleVideoUpload(file);
+                        } else {
+                          handleAddImage(file);
+                        }
                       }
                     }}
                   />
                 </label>
               </div>
 
-              {allImages.length > 0 ? (
+              {/* Video preview (if scene has video) */}
+              {scene.video_url && scene.scene_type === 'video' ? (
+                <div className="space-y-3">
+                  <div className="relative rounded-lg overflow-hidden border border-border bg-black">
+                    <video
+                      src={scene.video_url}
+                      controls
+                      className="w-full max-h-64 object-contain"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-xs">
+                      <Video className="h-3 w-3 mr-1" />
+                      Video Scene
+                    </Badge>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleRemoveVideo}
+                      className="h-7 text-xs text-destructive hover:text-destructive"
+                    >
+                      <X className="h-3 w-3 mr-1" />
+                      Remove Video
+                    </Button>
+                  </div>
+                  <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                    <p className="text-sm text-blue-600 dark:text-blue-400">
+                      <strong>Video Scene:</strong> This uploaded video clip will be used directly in the final render (trimmed to scene duration).
+                    </p>
+                  </div>
+                </div>
+              ) : allImages.length > 0 ? (
                 <div className="space-y-3">
                   {allImages.map((url, idx) => {
                     const customDuration = imageDurations[idx] || 0;
@@ -759,16 +862,21 @@ export function SceneCard({ scene, isExpanded, onToggle, onUpdate, projectId, is
                 </div>
               ) : (
                 <label className="flex flex-col items-center justify-center aspect-video max-w-md rounded-lg border-2 border-dashed border-border hover:border-primary/50 cursor-pointer transition-colors bg-muted/30">
-                  <Image className="h-8 w-8 text-muted-foreground mb-2" />
-                  <span className="text-sm text-muted-foreground">Upload First Image</span>
-                  <span className="text-xs text-muted-foreground mt-1">A slideshow video will be generated from your images</span>
+                  <Upload className="h-8 w-8 text-muted-foreground mb-2" />
+                  <span className="text-sm text-muted-foreground">Upload Image or Video</span>
+                  <span className="text-xs text-muted-foreground mt-1">Images create a slideshow, or upload a video clip from Runway, Luma, etc.</span>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/*,video/mp4,video/quicktime,video/webm"
                     className="hidden"
                     onChange={(e) => {
-                      if (e.target.files?.[0]) {
-                        handleAddImage(e.target.files[0]);
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        if (file.type.startsWith('video/')) {
+                          handleVideoUpload(file);
+                        } else {
+                          handleAddImage(file);
+                        }
                       }
                     }}
                   />

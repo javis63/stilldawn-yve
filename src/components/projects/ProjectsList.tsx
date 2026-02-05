@@ -162,7 +162,19 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
     return matchesSearch && (showArchived ? isArchived : !isArchived);
   });
 
-  const getStatusColor = (status: string) => {
+  const normalizeStatus = (raw: string): string => {
+    const s = (raw || "").toLowerCase().trim();
+    if (s.includes("completed") || s.includes("complete")) return "completed";
+    if (s.includes("error") || s.includes("failed")) return "error";
+    if (s.includes("rendering")) return "rendering";
+    if (s.includes("processing")) return "processing";
+    if (s.includes("ready")) return "ready";
+    if (s.includes("draft")) return "draft";
+    return s || "draft";
+  };
+
+  const getStatusColor = (rawStatus: string) => {
+    const status = normalizeStatus(rawStatus);
     switch (status) {
       case "completed":
         return "text-green-400";
@@ -249,9 +261,16 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
                       {project.title}
                     </p>
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <span className={`text-xs capitalize ${getStatusColor(project.status)}`}>
-                        {project.status}
-                        {project.status === "processing" && project.progress && project.progress > 0 && (
+                      <span className={`text-xs ${getStatusColor(project.status)}`}>
+                        {({
+                          draft: "Draft",
+                          processing: "Processing",
+                          ready: "Ready",
+                          rendering: "Rendering",
+                          completed: "Complete",
+                          error: "Error",
+                        } as Record<string, string>)[normalizeStatus(project.status)] || normalizeStatus(project.status)}
+                        {normalizeStatus(project.status) === "processing" && project.progress && project.progress > 0 && (
                           <span className="ml-1">({project.progress}%)</span>
                         )}
                       </span>
@@ -260,7 +279,7 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
                         {formatDistanceToNow(new Date(project.created_at), { addSuffix: true })}
                       </span>
                     </div>
-                    {project.status === "processing" && project.progress && project.progress > 0 && (
+                    {normalizeStatus(project.status) === "processing" && project.progress && project.progress > 0 && (
                       <Progress value={project.progress} className="h-1 mt-2" />
                     )}
                   </div>
@@ -268,14 +287,14 @@ export function ProjectsList({ selectedProjectId, onSelectProject }: ProjectsLis
                     <DropdownMenuTrigger asChild>
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 text-muted-foreground shrink-0 ml-1"
+                        size="icon"
+                        className="h-7 w-7 shrink-0 ml-1 text-muted-foreground hover:text-foreground"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <MoreVertical className="h-3.5 w-3.5" />
+                        <MoreVertical className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="z-50 bg-popover border border-border shadow-lg" onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
                       <DropdownMenuItem
                         onClick={() => handleArchiveProject(project, !(project as any).archived)}
                       >

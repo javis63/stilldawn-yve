@@ -57,8 +57,8 @@ export function ProjectsTab({ initialProjectId }: ProjectsTabProps) {
   return (
     <div className="flex gap-6 min-h-[70vh]">
       {/* Left Sidebar - Projects List */}
-      <div className="w-80 shrink-0">
-        <Card className="h-full bg-card border-border">
+      <div className="w-96 shrink-0">
+        <Card className="h-full bg-card border-border overflow-visible">
           <ProjectsList
             key={refreshKey}
             selectedProjectId={selectedProject?.id || null}
